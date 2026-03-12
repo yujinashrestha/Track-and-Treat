@@ -6,7 +6,7 @@ import {
   Utensils, Clock, Zap
 } from "lucide-react";
 import { Calendar } from '@/components/ui/calendar';
-
+import { useRouter } from 'next/navigation';
 // --- Types ---
 interface Nutrient {
   label: string;
@@ -120,7 +120,7 @@ export default function Dashboard() {
   const [mealNotes, setMealNotes] = useState('');
   const formRef = useRef<HTMLDivElement>(null);
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(undefined);
-
+  const router = useRouter(); 
   useEffect(() => {
     const token = localStorage.getItem('auth');
     if (!token) { /* router.push('/login') */ }
@@ -166,6 +166,7 @@ export default function Dashboard() {
 
   const handleLogout = () => {
     localStorage.removeItem('auth');
+    router.push('/login')
   };
 
   if (loading) return (
@@ -212,7 +213,7 @@ export default function Dashboard() {
                   <span className="text-xs font-black uppercase tracking-wider">7 Day Streak</span>
                 </div>
               </div>
-              <button onClick={handleLogout} className="p-2 bg-slate-50 text-slate-500 rounded-xl hover:bg-slate-100 transition-all">
+              <button onClick={handleLogout} className="p-2 bg-slate-50 text-slate-500 rounded-xl hover:bg-slate-100 transition-all cursor-pointer">
                 <LogOut className="w-4 h-4" />
               </button>
             </div>
