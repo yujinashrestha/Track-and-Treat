@@ -11,19 +11,23 @@ import {
     Scale,
     ChevronRight,
     ChevronLeft,
-    CheckCircle2,
-    Dumbbell,
-    Utensils,
     BicepsFlexed,
-    Zap
+    Zap,
+    DollarSign,
+    Leaf,
+    ShieldAlert,
+    CheckCircle2,
+    Utensils
 } from "lucide-react";
 
 import type { PhysicalMetrics } from '../../lib/algorithms/nutrition-logic';
 import { calculateTDEE, calculateMacros, calculateBMI, getWeightCategory } from '../../lib/algorithms/nutrition-logic';
 import { AnimatePresence, motion } from 'framer-motion';
+import { useAppContext } from '../../lib/context/AppContext';
 
 export default function ProfileSetup() {
     const router = useRouter();
+    const { setMetrics, setDailyCals, login } = useAppContext();
     const [loading, setLoading] = useState(false);
     const [formData, setFormData] = useState({
         username: '',
@@ -35,6 +39,9 @@ export default function ProfileSetup() {
         height: '',
         goal: 'maintain',
         activityLevel: 'moderate',
+        budget: '',
+        dietType: 'omnivore',
+        allergies: [] as string[],
     });
 
     const [isCalculating, setIsCalculating] = useState(false);
@@ -49,6 +56,7 @@ export default function ProfileSetup() {
         <BasicInfo key="basic" {...formData} updateFields={updateFields} />,
         <PhysicalMetrics key="metrics" {...formData} updateFields={updateFields} />,
         <GoalSelection key="goals" {...formData} weightCategory={weightCategory} updateFields={updateFields} />,
+        <DietaryConstraints key="constraints" {...formData} updateFields={updateFields} />,
         <ResultsSummary key="results" {...formData} />
     ];
 
@@ -73,7 +81,7 @@ export default function ProfileSetup() {
         }
 
         // After Step 3 (Goal Selection), show calculation loading for targets
-        if (currentStepIndex === 2) {
+        if (currentStepIndex === 3) {
             setIsCalculating(true);
             setAnalysisStage(1);
             
@@ -106,10 +114,11 @@ export default function ProfileSetup() {
                 goal: formData.goal as any,
             };
             const dailyCals = calculateTDEE(metrics);
-            localStorage.setItem('userMetrics', JSON.stringify(metrics));
-            localStorage.setItem('dailyCals', dailyCals.toString());
-            localStorage.setItem('auth', 'real-token');
-            router.push('/dashboard');
+            
+            // Use Global Context instead of direct localStorage
+            setMetrics(metrics);
+            setDailyCals(dailyCals);
+            login('real-token'); // This also saves to localStorage and redirects
         }, 1000);
     };
 
@@ -159,7 +168,7 @@ export default function ProfileSetup() {
                     <div className="mb-12">
                         <div className="flex items-center justify-between mb-4">
                             <span className="text-xs font-black uppercase tracking-widest text-emerald-600 bg-emerald-50 px-4 py-1.5 rounded-full">
-                                {currentStepIndex === 3 ? "Analysis Complete ✨" : `Step ${currentStepIndex + 1} of ${steps.length}`}
+                                {currentStepIndex === 4 ? "Analysis Complete ✨" : `Step ${currentStepIndex + 1} of ${steps.length}`}
                             </span>
                             <div className="flex gap-2">
                                 {steps.map((_, i) => (
@@ -193,7 +202,7 @@ export default function ProfileSetup() {
                             <button
                                 type="submit"
                                 disabled={loading || isCalculating}
-                                className={`flex-2 py-5 px-8 rounded-2xl ${currentStepIndex === 3 ? 'bg-emerald-900' : 'bg-emerald-600'} text-white font-black shadow-xl shadow-emerald-900/10 hover:bg-opacity-90 transition-all flex items-center justify-center gap-2 active:scale-95 cursor-pointer disabled:opacity-50`}
+                                className={`flex-2 py-5 px-8 rounded-2xl ${currentStepIndex === 4 ? 'bg-emerald-900' : 'bg-emerald-600'} text-white font-black shadow-xl shadow-emerald-900/10 hover:bg-opacity-90 transition-all flex items-center justify-center gap-2 active:scale-95 cursor-pointer disabled:opacity-50`}
                             >
                                 {loading ? 'Finalizing Profile...' : isLastStep ? 'Start My Journey →' : 'Next Step'}
                                 {!loading && (isLastStep ? <CheckCircle2 className="w-5 h-5" /> : <ChevronRight className="w-5 h-5" />)}
@@ -444,6 +453,106 @@ function GoalSelection({ goal, weightCategory, updateFields }: any) {
                         {goal === g.id && <CheckCircle2 className="ml-auto w-6 h-6" />}
                     </button>
                 ))}
+            </div>
+        </div>
+    );
+}
+
+function DietaryConstraints({ budget, dietType, allergies, updateFields }: any) {
+    const dietTypes = [
+        { id: 'omnivore', label: 'Omnivore', desc: 'Eat everything' },
+        { id: 'vegetarian', label: 'Vegetarian', desc: 'No meat' },
+        { id: 'vegan', label: 'Vegan', desc: 'No animal products' },
+        { id: 'pescatarian', label: 'Pescatarian', desc: 'Meat only from fish' },
+    ];
+
+    const commonAllergies = [
+        'Gluten', 'Dairy', 'Peanuts', 'Shellfish', 'Soy', 'Eggs', 'Lactose', 'None'
+    ];
+
+    const toggleAllergy = (allergy: string) => {
+        if (allergy === 'None') {
+            updateFields({ allergies: ['None'] });
+            return;
+        }
+        
+        let newAllergies = allergies.filter((a: string) => a !== 'None');
+        if (newAllergies.includes(allergy)) {
+            newAllergies = newAllergies.filter((a: string) => a !== allergy);
+        } else {
+            newAllergies = [...newAllergies, allergy];
+        }
+        updateFields({ allergies: newAllergies });
+    };
+
+    return (
+        <div className="space-y-8">
+            <div className="flex items-center gap-4 mb-2">
+                <div className="w-14 h-14 bg-amber-50 rounded-2xl flex items-center justify-center">
+                    <ShieldAlert className="w-7 h-7 text-amber-600" />
+                </div>
+                <div>
+                    <h2 className="text-2xl font-black text-slate-900">Dietary Envelope</h2>
+                    <p className="text-slate-500 font-medium">Constraints for the Meal Plan</p>
+                </div>
+            </div>
+
+            <div className="space-y-6">
+                {/* Budget Section */}
+                <div className="space-y-3">
+                    <label className="text-xs font-black uppercase tracking-widest text-slate-400 px-1">Daily Food Budget (NPR)</label>
+                    <div className="relative">
+                        <span className="absolute left-6 top-1/2 -translate-y-1/2 text-emerald-500 w-5 h-5">Rs. </span>
+                        <input
+                            required
+                            type="number"
+                            value={budget}
+                            onChange={e => updateFields({ budget: e.target.value })}
+                            className="w-full pl-14 pr-6 py-4 bg-slate-50 border-2 border-transparent rounded-2xl focus:bg-white focus:border-amber-500 outline-hidden transition-all font-black text-lg"
+                        />
+                    </div>
+                </div>
+
+                {/* Diet Type */}
+                <div className="space-y-3">
+                    <label className="text-xs font-black uppercase tracking-widest text-slate-400 px-1">Dietary Preference</label>
+                    <div className="grid grid-cols-2 gap-3">
+                        {dietTypes.map((d) => (
+                            <button
+                                key={d.id}
+                                type="button"
+                                onClick={() => updateFields({ dietType: d.id })}
+                                className={`p-4 rounded-2xl border-2 text-left transition-all active:scale-[0.98] cursor-pointer ${dietType === d.id
+                                    ? 'bg-amber-600 border-amber-600 text-white shadow-lg'
+                                    : 'bg-slate-50 border-transparent text-slate-500 hover:border-amber-200'
+                                    }`}
+                            >
+                                <p className="font-black text-sm">{d.label}</p>
+                                <p className={`text-[10px] ${dietType === d.id ? 'text-amber-100' : 'text-slate-400'}`}>{d.desc}</p>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                {/* Allergies */}
+                <div className="space-y-3">
+                    <label className="text-xs font-black uppercase tracking-widest text-slate-400 px-1">Hard Allergy Blocks (Select all that apply)</label>
+                    <div className="flex flex-wrap gap-2">
+                        {commonAllergies.map((a) => (
+                            <button
+                                key={a}
+                                type="button"
+                                onClick={() => toggleAllergy(a)}
+                                className={`px-4 py-2.5 rounded-xl border-2 text-xs font-black transition-all cursor-pointer ${allergies.includes(a)
+                                    ? 'bg-rose-600 border-rose-600 text-white shadow-md'
+                                    : 'bg-white border-slate-100 text-slate-400 hover:border-rose-200'
+                                    }`}
+                            >
+                                {a}
+                            </button>
+                        ))}
+                    </div>
+                </div>
             </div>
         </div>
     );
