@@ -15,6 +15,8 @@ import {
 // Logic & Data
 import { calculateMacros, getStrictnessLevel, StrictnessLevel } from '@/lib/algorithms/nutrition-logic';
 import { parseMealAlgorithmic } from '@/lib/food-db';
+import { useAuth } from '@/lib/auth-context';
+import { getStats, ApiError } from '@/lib/api';
 
 // --- Types ---
 interface Meal {
@@ -30,6 +32,7 @@ interface Meal {
 
 export default function Dashboard() {
   const router = useRouter();
+  const { isAuthenticated, loading: authLoading, logout } = useAuth();
   const [loading, setLoading] = useState(true);
   const [meals, setMeals] = useState<Meal[]>([]);
   const [targetCals, setTargetCals] = useState(2100);
@@ -44,38 +47,37 @@ export default function Dashboard() {
   const [logged, setLogged] = useState(false);
 
   useEffect(() => {
-    const auth = localStorage.getItem('auth');
-    if (!auth) {
+    if (authLoading) return;
+    if (!isAuthenticated) {
       router.push('/login');
       return;
     }
 
-    // Load algorithmic data from profile setup
-    const savedMetrics = localStorage.getItem('userMetrics');
-    const savedCals = localStorage.getItem('dailyCals');
-
-    if (savedCals) {
-      const cals = parseInt(savedCals);
-      setTargetCals(cals);
-
-      if (savedMetrics) {
-        try {
-          const metrics = JSON.parse(savedMetrics);
-          const macros = calculateMacros(cals, metrics.goal);
+    // Load targets from API
+    getStats()
+      .then((stats) => {
+        if (stats.targetCalories) {
+          setTargetCals(Math.round(stats.targetCalories));
+          const macros = calculateMacros(Math.round(stats.targetCalories), stats.dietaryGoal || 'maintain');
           setTargetMacros(macros);
-        } catch (e) {
-          console.error("Failed to parse metrics", e);
         }
-      }
-    }
-
-    // Mock initial meals
-    setMeals([
-      { name: 'Oats with Milk', cal: 450, prot: 20, carbs: 65, fat: 12, fiber: 8, time: '3h ago', emoji: '🥣' },
-    ]);
-
-    setLoading(false);
-  }, [router]);
+      })
+      .catch((err) => {
+        if (err instanceof ApiError && err.status === 404) {
+          // Profile not created yet — redirect to setup
+          router.push('/profile-setup');
+          return;
+        }
+        console.error('Failed to load stats:', err);
+      })
+      .finally(() => {
+        // Mock initial meals (will be replaced with meal-log API later)
+        setMeals([
+          { name: 'Oats with Milk', cal: 450, prot: 20, carbs: 65, fat: 12, fiber: 8, time: '3h ago', emoji: '🥣' },
+        ]);
+        setLoading(false);
+      });
+  }, [router, authLoading, isAuthenticated]);
 
   // ALGORITHM: Calculate current adherence & strictness
   const totalCals = useMemo(() => meals.reduce((s, m) => s + m.cal, 0), [meals]);
@@ -179,7 +181,7 @@ export default function Dashboard() {
                 <div className={`w-2 h-2 rounded-full ${theme.bg} animate-pulse`} />
                 <span className={`text-[10px] font-black uppercase tracking-widest ${theme.text}`}>{theme.label}</span>
               </div>
-              <button onClick={() => { localStorage.removeItem('auth'); router.push('/login'); }} className="p-2 bg-slate-50 text-slate-500 rounded-xl hover:bg-slate-100 cursor-pointer"><LogOut className="w-4 h-4" /></button>
+              <button onClick={() => { logout().then(() => router.push('/login')); }} className="p-2 bg-slate-50 text-slate-500 rounded-xl hover:bg-slate-100 cursor-pointer"><LogOut className="w-4 h-4" /></button>
             </div>
           </div>
         </div>

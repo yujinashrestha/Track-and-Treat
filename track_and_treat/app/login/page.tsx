@@ -3,20 +3,61 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { useAuth } from '@/lib/auth-context';
+import { ApiError, resendOtp } from '@/lib/api';
 
 export default function Login() {
-  const [identifier, setIdentifier] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [needsVerification, setNeedsVerification] = useState(false);
+  const [resending, setResending] = useState(false);
   const router = useRouter();
+  const { login } = useAuth();
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    setTimeout(() => {
-      localStorage.setItem('auth', 'token');
+    setError('');
+    setNeedsVerification(false);
+
+    try {
+      await login(username, password);
       router.push('/dashboard');
-    }, 1000);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        const msg = err.message.toLowerCase();
+        if (err.status === 403 || msg.includes('verif') || msg.includes('otp')) {
+          setNeedsVerification(true);
+          setError('Your account is not verified yet.');
+        } else {
+          setError(err.message);
+        }
+      } else {
+        setError('Login failed. Please try again.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResendOtp = async () => {
+    setResending(true);
+    setError('');
+    try {
+      await resendOtp({ username });
+      sessionStorage.setItem('regUsername', username);
+      router.push('/verify-otp');
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setError(err.message);
+      } else {
+        setError('Failed to resend OTP. Please try again.');
+      }
+    } finally {
+      setResending(false);
+    }
   };
 
   return (
@@ -30,12 +71,18 @@ export default function Login() {
           </p>
         </div>
 
+        {error && (
+          <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-sm font-medium">
+            {error}
+          </div>
+        )}
+
         <form onSubmit={handleSubmit} className="space-y-5">
           <input
             type="text"
-            placeholder="Email or username"
-            value={identifier}
-            onChange={(e) => setIdentifier(e.target.value)}
+            placeholder="Username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
             required
             className="w-full p-4 border border-emerald-100 rounded-2xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all outline-none bg-emerald-50/30"
           />
@@ -55,6 +102,17 @@ export default function Login() {
             {loading ? 'Logging in...' : 'Enter Dashboard →'}
           </button>
         </form>
+
+        {needsVerification && (
+          <button
+            type="button"
+            onClick={handleResendOtp}
+            disabled={resending}
+            className="w-full mt-4 bg-amber-500 text-white p-4 rounded-2xl font-bold hover:bg-amber-600 hover:shadow-lg hover:shadow-amber-200 transition-all active:scale-[0.98] disabled:opacity-50"
+          >
+            {resending ? 'Sending OTP...' : 'Verify Account → Resend OTP'}
+          </button>
+        )}
       </div>
     </div>
   );
