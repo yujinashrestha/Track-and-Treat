@@ -1,181 +1,260 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, ReactNode, useMemo } from 'react';
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  ReactNode,
+  useMemo,
+  useCallback,
+} from 'react';
 import { useRouter } from 'next/navigation';
-import type { PhysicalMetrics } from '../algorithms/nutrition-logic';
-import { calculateMacros } from '../algorithms/nutrition-logic';
 
-// --- Types ---
-interface Meal {
-  id?: number;
-  name: string;
-  cal: number;
-  prot: number;
-  carbs: number;
-  fat: number;
-  fiber: number;
-  time: string;
-  emoji: string;
-}
+import type {
+  PhysicalMetrics,
+  DayPlans,
+  DayLogs,
+  MealLogItem,
+} from '@/lib/types';
 
-interface PlannedMeal {
-  id: number;
-  name: string;
-  cal: number;
-  time: string;
-  icon: string;
-  completed: boolean;
-  skipped: boolean;
-}
+import { calculateMacros } from '@/lib/algorithms/nutrition-logic';
+import { parseMealAlgorithmic } from '@/lib/food-db';
+
+import {
+  INITIAL_SEVEN_DAY_PLANS,
+  INITIAL_DAY_LOGS,
+} from '@/lib/constants/mockdata';
+
+/* ───────────────── TYPES ───────────────── */
 
 interface AppContextType {
   token: string | null;
+  userName: string | null;
   isAuthenticated: boolean;
-  login: (token: string) => void;
+
+  login: (token: string, name?: string) => void;
   logout: () => void;
+
   metrics: PhysicalMetrics | null;
-  setMetrics: (metrics: PhysicalMetrics) => void;
+  setMetrics: (m: PhysicalMetrics) => void;
+
+  onboardingComplete: (m: PhysicalMetrics) => void;
+
   dailyCals: number;
   setDailyCals: (cals: number) => void;
-  targetMacros: { protein: number; carbs: number; fat: number };
-  meals: Meal[];
-  addMeal: (meal: Meal) => void;
-  setMeals: (meals: Meal[]) => void;
-  plannedMeals: PlannedMeal[];
-  validateMeal: (plannedId: number) => void;
-  skipMeal: (plannedId: number) => void;
+
+  targetMacros: {
+    protein: number;
+    carbs: number;
+    fat: number;
+  };
+
+  dayPlans: DayPlans;
+  dayLogs: DayLogs;
+
+  validateMeal: (dayIdx: number, mealId: number) => void;
+  skipMeal: (dayIdx: number, mealId: number) => void;
+  logMealFromText: (dayIdx: number, text: string) => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
+/* ───────────────── PROVIDER ───────────────── */
+
 export function AppProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
+
   const [token, setToken] = useState<string | null>(null);
+  const [userName, setUserName] = useState<string | null>(null);
+
   const [metrics, setMetricsState] = useState<PhysicalMetrics | null>(null);
-  const [dailyCals, setDailyCalsState] = useState<number>(2200);
-  const [meals, setMealsState] = useState<Meal[]>([]);
+  const [dailyCals, setDailyCalsState] = useState(2200);
 
-  // Initialize Planned Meals (The Schedule)
-  const [plannedMeals, setPlannedMeals] = useState<PlannedMeal[]>([
-    { id: 1, name: 'Standard Daal Bhat', cal: 650, time: 'Morning', icon: '🍚', completed: false, skipped: false },
-    { id: 2, name: 'Buff Momo (10 pcs)', cal: 450, time: 'Afternoon', icon: '🥟', completed: false, skipped: false },
-    { id: 3, name: 'Chiura & Egg Curry', cal: 550, time: 'Evening', icon: '🍛', completed: false, skipped: false },
-  ]);
+  const [dayPlans, setDayPlans] = useState<DayPlans>(INITIAL_SEVEN_DAY_PLANS);
+  const [dayLogs, setDayLogs] = useState<DayLogs>(INITIAL_DAY_LOGS);
 
-  // Sync Load
+  /* ───────── HYDRATION ───────── */
   useEffect(() => {
-    const savedToken = localStorage.getItem('auth');
-    const savedMetrics = localStorage.getItem('userMetrics');
-    const savedCals = localStorage.getItem('dailyCals');
-    const savedMeals = localStorage.getItem('meals');
-    const savedPlan = localStorage.getItem('plannedMeals');
+    const load = (key: string) => {
+      try {
+        return localStorage.getItem(key);
+      } catch {
+        return null;
+      }
+    };
+
+    const savedToken = load('auth');
+    const savedName = load('userName');
+    const savedMetrics = load('userMetrics');
+    const savedCals = load('dailyCals');
+    const savedPlans = load('dayPlans');
+    const savedLogs = load('dayLogs');
 
     if (savedToken) setToken(savedToken);
+    if (savedName) setUserName(savedName);
     if (savedMetrics) setMetricsState(JSON.parse(savedMetrics));
-    if (savedCals) setDailyCalsState(parseInt(savedCals));
-    
-    // If no meals, add a seed meal so it's not empty
-    if (savedMeals) {
-      setMealsState(JSON.parse(savedMeals));
-    } else if (savedToken) {
-      const seedMeal = { name: 'Morning Tea & Biscuits', cal: 150, prot: 5, carbs: 25, fat: 5, fiber: 2, time: 'Started Day', emoji: '☕' };
-      setMealsState([seedMeal]);
-      localStorage.setItem('meals', JSON.stringify([seedMeal]));
-    }
-
-    if (savedPlan) setPlannedMeals(JSON.parse(savedPlan));
+    if (savedCals) setDailyCalsState(Number(savedCals));
+    if (savedPlans) setDayPlans(JSON.parse(savedPlans));
+    if (savedLogs) setDayLogs(JSON.parse(savedLogs));
   }, []);
 
+  /* ───────── LOGIN ───────── */
+  const login = useCallback((newToken: string, name?: string) => {
+    setToken(newToken);
+    localStorage.setItem('auth', newToken);
+
+    if (name) {
+      setUserName(name);
+      localStorage.setItem('userName', name);
+    }
+
+    router.push('/onboarding');
+  }, [router]);
+
+  /* ───────── LOGOUT ───────── */
+  const logout = useCallback(() => {
+    setToken(null);
+    setUserName(null);
+    setMetricsState(null);
+
+    localStorage.clear();
+    router.push('/login');
+  }, [router]);
+
+  /* ───────── METRICS ───────── */
+  const setMetrics = useCallback((m: PhysicalMetrics) => {
+    setMetricsState(m);
+    localStorage.setItem('userMetrics', JSON.stringify(m));
+  }, []);
+
+  const setDailyCals = useCallback((cals: number) => {
+    setDailyCalsState(cals);
+    localStorage.setItem('dailyCals', String(cals));
+  }, []);
+
+  /* ───────── ONBOARDING ───────── */
+  const onboardingComplete = useCallback((m: PhysicalMetrics) => {
+    setMetricsState(m);
+    localStorage.setItem('userMetrics', JSON.stringify(m));
+
+    const cals = calculateMacros(2200, m.goal);
+    setDailyCalsState(2200);
+
+    router.push('/dashboard');
+  }, [router]);
+
+  /* ───────── MACROS ───────── */
   const targetMacros = useMemo(() => {
-    if (!metrics || !dailyCals) return { protein: 0, carbs: 0, fat: 0 };
+    if (!metrics) return { protein: 0, carbs: 0, fat: 0 };
     return calculateMacros(dailyCals, metrics.goal);
   }, [dailyCals, metrics]);
 
-  const login = (newToken: string) => {
-    setToken(newToken);
-    localStorage.setItem('auth', newToken);
-    router.push('/dashboard');
-  };
-
-  const logout = () => {
-    setToken(null);
-    setMetricsState(null);
-    setMealsState([]);
-    localStorage.clear();
-    router.push('/login');
-  };
-
-  const addMeal = (meal: Meal) => {
-    setMealsState(prev => {
-      const updated = [meal, ...prev];
-      localStorage.setItem('meals', JSON.stringify(updated));
+  /* ───────── ACTIONS ───────── */
+  const validateMeal = useCallback((dayIdx: number, mealId: number) => {
+    setDayPlans(prev => {
+      const updated = {
+        ...prev,
+        [dayIdx]: prev[dayIdx].map(m =>
+          m.id === mealId ? { ...m, completed: true } : m
+        ),
+      };
+      localStorage.setItem('dayPlans', JSON.stringify(updated));
       return updated;
     });
-  };
+  }, []);
 
-  // NEW: Validate Function (Plan -> Reality)
-  const validateMeal = (id: number) => {
-    const planned = plannedMeals.find(m => m.id === id);
-    if (!planned || planned.completed) return;
+  const skipMeal = useCallback((dayIdx: number, mealId: number) => {
+    setDayPlans(prev => {
+      const updated = {
+        ...prev,
+        [dayIdx]: prev[dayIdx].map(m =>
+          m.id === mealId ? { ...m, skipped: !m.skipped } : m
+        ),
+      };
+      localStorage.setItem('dayPlans', JSON.stringify(updated));
+      return updated;
+    });
+  }, []);
 
-    // 1. Mark as completed in plan
-    const updatedPlan = plannedMeals.map(m => m.id === id ? { ...m, completed: true } : m);
-    setPlannedMeals(updatedPlan);
-    localStorage.setItem('plannedMeals', JSON.stringify(updatedPlan));
+  const logMealFromText = useCallback((dayIdx: number, text: string) => {
+    const parsed = parseMealAlgorithmic(text);
+    if (!parsed.cal) return;
 
-    // 2. Automatically log into Reality
-    const newLoggedMeal: Meal = {
-      name: planned.name,
-      cal: planned.cal,
-      prot: Math.round(planned.cal * 0.1), // Estimated
-      carbs: Math.round(planned.cal * 0.15),
-      fat: Math.round(planned.cal * 0.05),
-      fiber: 5,
-      time: 'Validated',
-      emoji: planned.icon
+    const meal: MealLogItem = {
+      name: text,
+      emoji: parsed.matches.join('') || '🍽️',
+      cal: parsed.cal,
+      prot: parsed.prot,
+      carbs: parsed.carbs,
+      fat: parsed.fat,
+      time: new Date().toLocaleTimeString(),
     };
-    addMeal(newLoggedMeal);
-  };
 
-  const skipMeal = (id: number) => {
-    const updatedPlan = plannedMeals.map(m => m.id === id ? { ...m, skipped: !m.skipped } : m);
-    setPlannedMeals(updatedPlan);
-    localStorage.setItem('plannedMeals', JSON.stringify(updatedPlan));
-  };
+    setDayLogs(prev => {
+      const updated = {
+        ...prev,
+        [dayIdx]: [...(prev[dayIdx] || []), meal],
+      };
 
-  const setMetrics = (newMetrics: PhysicalMetrics) => {
-    setMetricsState(newMetrics);
-    localStorage.setItem('userMetrics', JSON.stringify(newMetrics));
-  };
+      localStorage.setItem('dayLogs', JSON.stringify(updated));
+      return updated;
+    });
+  }, []);
 
-  const setDailyCals = (cals: number) => {
-    setDailyCalsState(cals);
-    localStorage.setItem('dailyCals', cals.toString());
-  };
-
-  const value = {
+  /* ───────── CONTEXT VALUE ───────── */
+  const value = useMemo(() => ({
     token,
+    userName,
     isAuthenticated: !!token,
+
     login,
     logout,
+
     metrics,
     setMetrics,
+
+    onboardingComplete,
+
     dailyCals,
     setDailyCals,
+
     targetMacros,
-    meals,
-    addMeal,
-    setMeals: setMealsState,
-    plannedMeals,
+
+    dayPlans,
+    dayLogs,
+
     validateMeal,
     skipMeal,
-  };
+    logMealFromText,
+  }), [
+    token,
+    userName,
+    metrics,
+    dailyCals,
+    targetMacros,
+    dayPlans,
+    dayLogs,
+    login,
+    logout,
+    setMetrics,
+    onboardingComplete,
+    setDailyCals,
+    validateMeal,
+    skipMeal,
+    logMealFromText,
+  ]);
 
-  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
+  return (
+    <AppContext.Provider value={value}>
+      {children}
+    </AppContext.Provider>
+  );
 }
 
+/* ───────── HOOK ───────── */
 export function useAppContext() {
-  const context = useContext(AppContext);
-  if (context === undefined) throw new Error('useAppContext must be used within an AppProvider');
-  return context;
+  const ctx = useContext(AppContext);
+  if (!ctx) throw new Error('useAppContext must be used within AppProvider');
+  return ctx;
 }
