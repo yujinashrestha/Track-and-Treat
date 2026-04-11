@@ -16,7 +16,7 @@ export default function Login() {
     e.preventDefault();
     setLoading(true);
     setTimeout(() => {
-      login('token');
+      login('token', identifier);
     }, 1000);
   };
 

@@ -10,7 +10,7 @@ import ComplianceHero   from '@/components/Dashboard/ComplianceHero';
 import MealPlanCard     from '@/components/Dashboard/MealPlanCard';
 import MealLogCard      from '@/components/Dashboard/MealLogCard';
 import MetabolicSummary from '@/components/Dashboard/MetabolicSummary';
-
+import StatsBar from '@/shared/StatsBar';
 import { TODAY, WEEK_DAYS, MONTHS } from '@/lib/constants/dates';
 import { WEEK_HISTORY_DATA } from '@/lib/constants/mockdata';
 import { TARGET } from '@/lib/constants/targets';
@@ -68,6 +68,7 @@ export default function DashboardPage() {
 
   return (
     <main className="w-full px-4 sm:px-8 lg:px-12 py-8">
+      <StatsBar  streak={4} goalStreak={6} weeklyScore={3}/>
 
       <WeekCalendar
         selectedDate={selectedDate}

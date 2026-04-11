@@ -1,12 +1,20 @@
 'use client'
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { useAppContext } from '@/lib/context/AppContext';
 
 export default function VerifyOtp() {
   const [code, setCode] = useState('');
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+  const { login } = useAppContext();
+  const [regUsername, setRegUsername] = useState('');
+
+  useEffect(() => {
+    const username = sessionStorage.getItem('regUsername') || '';
+    setRegUsername(username);
+  }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -14,6 +22,8 @@ export default function VerifyOtp() {
     // Simulation of verification logic (Step 3.2 in Backend)
     setTimeout(() => {
       localStorage.setItem('verified', 'true');
+      // Login with the registered username
+      login('verified-token', regUsername || 'User');
       router.push('/profile-setup');
     }, 1500);
   };

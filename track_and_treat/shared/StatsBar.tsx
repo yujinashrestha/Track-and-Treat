@@ -11,6 +11,7 @@ interface StatsBarProps {
 }
 
 export default function StatsBar({ streak, goalStreak, weeklyScore }: StatsBarProps) {
+  console.log('StatsBar rendered with:', { streak, goalStreak, weeklyScore });
   const stats = [
     { icon: '🔥', label: 'Log Streak',   value: `${streak} days`,     bg: 'bg-orange-50 border-orange-100',   numColor: 'text-orange-500'  },
     { icon: '🏆', label: 'Goal Streak',  value: `${goalStreak} days`, bg: 'bg-emerald-50 border-emerald-100', numColor: 'text-emerald-600' },

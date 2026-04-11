@@ -20,7 +20,7 @@ import {
     Utensils
 } from "lucide-react";
 
-import type { PhysicalMetrics } from '../../lib/algorithms/nutrition-logic';
+import type { PhysicalMetrics } from '../../lib/types';
 import { calculateTDEE, calculateMacros, calculateBMI, getWeightCategory } from '../../lib/algorithms/nutrition-logic';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useAppContext } from '../../lib/context/AppContext';
@@ -114,11 +114,11 @@ export default function ProfileSetup() {
                 goal: formData.goal as any,
             };
             const dailyCals = calculateTDEE(metrics);
-            
+
             // Use Global Context instead of direct localStorage
             setMetrics(metrics);
             setDailyCals(dailyCals);
-            login('real-token'); // This also saves to localStorage and redirects
+            login('real-token', formData.fullName || formData.username); // Pass fullName as username
         }, 1000);
     };
 

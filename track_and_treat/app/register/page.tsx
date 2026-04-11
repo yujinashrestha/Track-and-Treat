@@ -3,17 +3,21 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { useAppContext } from '@/lib/context/AppContext';
 
 export default function Register() {
   const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+  const { login } = useAppContext();
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setTimeout(() => {
       sessionStorage.setItem('regEmail', email);
+      sessionStorage.setItem('regUsername', username);
       router.push('/verify-otp');
     }, 1000);
   };
@@ -30,6 +34,14 @@ export default function Register() {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-5">
+          <input
+            type="text"
+            placeholder="Username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            required
+            className="w-full p-4 border border-emerald-100 rounded-2xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all outline-none bg-emerald-50/30"
+          />
           <input
             type="email"
             placeholder="Email Address"
