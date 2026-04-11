@@ -5,7 +5,7 @@
  */
 
 export interface FoodItem {
-  id: string;
+  id: string | number;
   name: string;
   cal: number;
   prot: number;

@@ -118,8 +118,8 @@ export function calculateBMI(weight: number, heightCm: number): number {
 }
 
 export function getWeightCategory(bmi: number): { label: string; color: string } {
-  if (bmi < 18.5) return { label: 'Underweight Identified', color: 'text-sky-500' };
-  if (bmi < 25) return { label: 'Normal Weight Identified', color: 'text-emerald-500' };
-  if (bmi < 30) return { label: 'Overweight Identified', color: 'text-orange-500' };
-  return { label: 'Obese Category Identified', color: 'text-rose-600' };
+  if (bmi < 18.5) return { label: 'Underweight Identified through BMI', color: 'text-sky-500' };
+  if (bmi < 25) return { label: 'Normal Weight Identified through BMI', color: 'text-emerald-500' };
+  if (bmi < 30) return { label: 'Overweight Identified through BMI', color: 'text-orange-500' };
+  return { label: 'Obesity Identified through BMI', color: 'text-rose-600' };
 }

@@ -1,54 +1,58 @@
-'use client';
+'use client'
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 
-export default function VerifyOTP() {
-    const [otp, setOtp] = useState('');
-    const [loading, setLoading] = useState(false);
-    const router = useRouter();
+export default function VerifyOtp() {
+  const [code, setCode] = useState('');
+  const [loading, setLoading] = useState(false);
+  const router = useRouter();
 
-    useEffect(() => {
-        if (!sessionStorage.getItem('regEmail')) router.push('/register');
-    }, []); //origin must be register page
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    // Simulation of verification logic (Step 3.2 in Backend)
+    setTimeout(() => {
+      localStorage.setItem('verified', 'true');
+      router.push('/profile-setup');
+    }, 1500);
+  };
 
-    const handleSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
-        setLoading(true);
-        setTimeout(() => {
-            sessionStorage.setItem('token', 'ephemeral');
-            router.push('/profile-setup');
-        }, 1000);
-    };
-
-    return (
-        <div className="min-h-screen bg-linear-to-br from-emerald-50 to-lime-100 flex items-center justify-center p-4">
-            <div className="max-w-md w-full bg-white rounded-3xl shadow-[0_20px_50px_rgba(5,150,105,0.1)] p-8">
-                <div className="text-center mb-8">
-                    <span className="text-5xl">📧</span>
-                    <h2 className="text-3xl font-extrabold mt-4 text-emerald-800">Verify OTP</h2>
-                    <p className="text-emerald-600/70 mt-2 font-medium">Check your email for the 6-digit code</p>
-                </div>
-
-                <form onSubmit={handleSubmit} className="space-y-6">
-                    <input
-                        type="text"
-                        placeholder="000000"
-                        maxLength={6}
-                        value={otp}
-                        onChange={(e) => setOtp(e.target.value)}
-                        required
-                        className="w-full p-4 border border-emerald-100 rounded-2xl text-center text-3xl font-bold tracking-[0.5em] focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all outline-none bg-emerald-50/30 text-emerald-800"
-                    />
-                    <button
-                        type="submit"
-                        disabled={loading || otp.length !== 6}
-                        className="w-full bg-emerald-600 text-white p-4 rounded-2xl font-bold hover:bg-emerald-700 hover:shadow-lg hover:shadow-emerald-200 transition-all active:scale-[0.98] disabled:opacity-50"
-                    >
-                        {loading ? 'Verifying...' : 'Verify & Continue →'}
-                    </button>
-                </form>
-            </div>
+  return (
+    <div className="min-h-[80vh] flex items-center justify-center p-4 bg-slate-50">
+      <div className="max-w-md w-full bg-white rounded-[2.5rem] shadow-xl p-10 border border-slate-100">
+        <div className="text-center mb-10">
+          <div className="w-20 h-20 bg-emerald-50 rounded-3xl flex items-center justify-center text-4xl mx-auto mb-6">
+            📧
+          </div>
+          <h2 className="text-3xl font-black text-emerald-950 mb-2">Check Your Email</h2>
+          <p className="text-slate-500 font-medium">We've sent a 6-digit verification code to your inbox. Enter it below to secure your account.</p>
         </div>
-    );
+
+        <form onSubmit={handleSubmit} className="space-y-6">
+          <input
+            type="text"
+            maxLength={6}
+            placeholder="000000"
+            value={code}
+            onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+            required
+            className="w-full p-6 bg-slate-50 border-2 border-slate-100 focus:border-emerald-600 rounded-3xl outline-none font-black text-4xl text-center tracking-[0.5em] transition-all placeholder:text-slate-200"
+          />
+          
+          <button
+            type="submit"
+            disabled={loading || code.length < 6}
+            className="w-full bg-emerald-600 text-white p-6 rounded-3xl font-black text-xl hover:bg-emerald-700 hover:shadow-2xl hover:shadow-emerald-900/20 transition-all active:scale-[0.98] disabled:opacity-50"
+          >
+            {loading ? 'Verifying...' : 'Verify & Continue'}
+          </button>
+
+          <p className="text-center text-sm font-bold text-slate-400">
+            Didn't receive the code? <button type="button" className="text-emerald-600 hover:underline">Resend</button>
+          </p>
+        </form>
+      </div>
+    </div>
+  );
 }
