@@ -24,7 +24,8 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
     body: body ? JSON.stringify(body) : undefined,
   });
 
-  if (res.status === 401 && accessToken) {
+  const isAuthEndpoint = path.startsWith('auth/');
+  if (res.status === 401 && accessToken && !isAuthEndpoint) {
     const refreshed = await tryRefreshTokens();
     if (refreshed) {
       headers['Authorization'] = `Bearer ${localStorage.getItem('accessToken')}`;
@@ -182,6 +183,104 @@ export function updateProfile(data: ProfileData) {
 
 export function getStats() {
   return request<UserStats>('users/me/stats', { method: 'GET' });
+}
+
+// --- Food API ---
+
+export interface FoodItem {
+  id: number;
+  name: string;
+  servingSize: string;
+  servingUnit: string;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  fiber: number;
+  category: string | null;
+  source: 'system' | 'user';
+}
+
+export function searchFood(query: string, limit = 20) {
+  return request<FoodItem[]>(`food/search?query=${encodeURIComponent(query)}&limit=${limit}`, {
+    method: 'GET',
+  });
+}
+
+// --- Meal Log API ---
+
+export type MealType = 'breakfast' | 'lunch' | 'dinner' | 'snack';
+
+export interface MealLog {
+  id: number;
+  userId: number;
+  foodItemId: number;
+  foodItem: FoodItem;
+  quantity: number;
+  mealType: MealType;
+  source: 'manual' | 'ai_parsed' | 'plan';
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  loggedAt: string;
+  createdAt: string;
+}
+
+export interface ParseTextResult {
+  logged: MealLog[];
+  unresolved: { items: string[]; message: string } | null;
+}
+
+export interface DailySummary {
+  date: string;
+  totals: { calories: number; protein: number; carbs: number; fat: number };
+  meals: Record<string, MealLog[]>;
+  logCount: number;
+}
+
+export interface DailyProgress {
+  date: string;
+  target: number;
+  consumed: number;
+  remaining: number;
+  percentage: number;
+  macros: { protein: number; carbs: number; fat: number };
+  meals: Record<string, MealLog[]>;
+  logCount: number;
+}
+
+export function parseText(data: { text: string; mealType: MealType; loggedAt?: string }) {
+  return request<ParseTextResult>('meal-logs/parse-text', {
+    method: 'POST',
+    body: data,
+  });
+}
+
+export function createMealLog(data: { foodItemId: number; quantity: number; mealType: MealType; loggedAt?: string }) {
+  return request<MealLog>('meal-logs', {
+    method: 'POST',
+    body: data,
+  });
+}
+
+export function getMealLogs(date: string, endDate?: string) {
+  let url = `meal-logs?date=${date}`;
+  if (endDate) url += `&endDate=${endDate}`;
+  return request<MealLog[]>(url, { method: 'GET' });
+}
+
+export function getDailySummary(date: string) {
+  return request<DailySummary>(`meal-logs/summary?date=${date}`, { method: 'GET' });
+}
+
+export function deleteMealLog(id: number) {
+  return request<void>(`meal-logs/${id}`, { method: 'DELETE' });
+}
+
+export function getDailyProgress(date?: string) {
+  const query = date ? `?date=${date}` : '';
+  return request<DailyProgress>(`tracking/daily${query}`, { method: 'GET' });
 }
 
 export { clearTokens };
