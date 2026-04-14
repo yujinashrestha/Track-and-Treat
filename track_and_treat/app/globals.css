@@ -137,3 +137,9 @@ body {
     @apply font-sans;
     }
 }
+
+@layer components {
+  .input-field {
+    @apply w-full px-4 py-3 bg-slate-50 border-2 border-transparent rounded-xl focus:bg-white focus:border-emerald-500 outline-hidden transition-all font-medium text-sm;
+  }
+}

@@ -24,10 +24,12 @@ import {
 
 import { updateProfile, getStats, ApiError } from '@/lib/api';
 import type { ProfileData, UserStats } from '@/lib/api';
+import { COUNTRIES } from '@/lib/countries';
 import { calculateBMI, getWeightCategory } from '../../lib/algorithms/nutrition-logic';
 import { AnimatePresence, motion } from 'framer-motion';
 
 interface FormData {
+    region: string;
     birthDate: string;
     biologicalSex: 'male' | 'female' | 'other' | '';
     currentWeight: string;
@@ -47,6 +49,7 @@ export default function ProfileSetup() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [formData, setFormData] = useState<FormData>({
+        region: '',
         birthDate: '',
         biologicalSex: '',
         currentWeight: '',
@@ -109,6 +112,7 @@ export default function ProfileSetup() {
                 setAnalysisStage(2);
 
                 const payload: ProfileData = {
+                    region: formData.region || undefined,
                     birthDate: formData.birthDate || undefined,
                     biologicalSex: formData.biologicalSex as ProfileData['biologicalSex'] || undefined,
                     heightCm: parseFloat(formData.heightCm) || undefined,
@@ -259,7 +263,7 @@ export default function ProfileSetup() {
 
 // ─── Step 1: Basic Info ───
 
-function BasicInfo({ birthDate, biologicalSex, updateFields }: any) {
+function BasicInfo({ region, birthDate, biologicalSex, updateFields }: any) {
     return (
         <div className="space-y-6">
             <div className="flex items-center gap-4 mb-4">
@@ -305,6 +309,18 @@ function BasicInfo({ birthDate, biologicalSex, updateFields }: any) {
                         onChange={e => updateFields({ birthDate: e.target.value })}
                         className="w-full px-6 py-4 bg-slate-50 border-2 border-transparent rounded-2xl focus:bg-white focus:border-emerald-500 outline-hidden transition-all font-medium"
                     />
+                </div>
+
+                <div>
+                    <label className="block text-xs font-black uppercase tracking-widest text-slate-400 mb-2">Country</label>
+                    <select
+                        value={region}
+                        onChange={e => updateFields({ region: e.target.value })}
+                        className="w-full px-6 py-4 bg-slate-50 border-2 border-transparent rounded-2xl focus:bg-white focus:border-emerald-500 outline-hidden transition-all font-medium appearance-none"
+                    >
+                        <option value="">Select country...</option>
+                        {COUNTRIES.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+                    </select>
                 </div>
             </div>
         </div>

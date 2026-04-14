@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   LayoutDashboard, Flame, Droplets, Scale, History,
-  PlusCircle, LogOut, TrendingUp, X, Trash2,
+  PlusCircle, LogOut, TrendingUp, X, Trash2, Search, Minus, Plus,
   Utensils, Clock, Zap, Target, CheckCircle2, PieChart as PieChartIcon
 } from "lucide-react";
 import { useRouter } from 'next/navigation';
@@ -14,10 +14,13 @@ import {
 
 import { calculateMacros, getStrictnessLevel, StrictnessLevel } from '@/lib/algorithms/nutrition-logic';
 import { useAuth } from '@/lib/auth-context';
+import { AppNav } from '@/components/app-nav';
 import {
   getStats, getDailyProgress, parseText, deleteMealLog,
+  searchFood, createMealLog,
+  createWaterLog, getWaterSummary, deleteWaterLog,
   ApiError,
-  type MealLog, type MealType, type DailyProgress,
+  type MealLog, type MealType, type DailyProgress, type FoodItem, type WaterSummary,
 } from '@/lib/api';
 
 const MEAL_TYPE_LABELS: Record<MealType, string> = {
@@ -59,9 +62,13 @@ export default function Dashboard() {
   // Meal data from API
   const [dailyProgress, setDailyProgress] = useState<DailyProgress | null>(null);
   const [allMealLogs, setAllMealLogs] = useState<MealLog[]>([]);
+  const [water, setWater] = useState<WaterSummary | null>(null);
+  const [customWaterAmt, setCustomWaterAmt] = useState(250);
+  const [showWaterStepper, setShowWaterStepper] = useState(false);
 
   // Form State
   const [showMealForm, setShowMealForm] = useState(false);
+  const [entryMode, setEntryMode] = useState<'text' | 'search'>('text');
   const [mealText, setMealText] = useState('');
   const [mealType, setMealType] = useState<MealType>('lunch');
   const [parseResult, setParseResult] = useState<any>(null);
@@ -69,12 +76,23 @@ export default function Dashboard() {
   const [logged, setLogged] = useState(false);
   const [formError, setFormError] = useState('');
 
+  // Search mode state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<FoodItem[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [selectedFood, setSelectedFood] = useState<FoodItem | null>(null);
+  const [quantity, setQuantity] = useState(1);
+  const [manualLogging, setManualLogging] = useState(false);
+
   const loadDashboardData = useCallback(async () => {
     try {
-      const [stats, progress] = await Promise.all([
+      const [stats, progress, waterData] = await Promise.all([
         getStats(),
         getDailyProgress(todayStr()),
+        getWaterSummary(todayStr()).catch(() => null),
       ]);
+
+      setWater(waterData);
 
       if (stats.targetCalories) {
         setTargetCals(Math.round(stats.targetCalories));
@@ -188,6 +206,69 @@ export default function Dashboard() {
     }
   };
 
+  const handleFoodSearch = async () => {
+    if (!searchQuery.trim()) return;
+    setSearching(true);
+    setFormError('');
+    try {
+      const results = await searchFood(searchQuery);
+      setSearchResults(results);
+      if (results.length === 0) setFormError('No food items found. Try a different search term.');
+    } catch {
+      setFormError('Search failed. Please try again.');
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const handleManualLog = async () => {
+    if (!selectedFood) return;
+    setManualLogging(true);
+    setFormError('');
+    try {
+      await createMealLog({ foodItemId: selectedFood.id, quantity, mealType });
+      setLogged(true);
+      setTimeout(() => {
+        setShowMealForm(false);
+        resetFormState();
+        loadDashboardData();
+      }, 800);
+    } catch (err) {
+      if (err instanceof ApiError) setFormError(err.message);
+      else setFormError('Failed to log meal.');
+    } finally {
+      setManualLogging(false);
+    }
+  };
+
+  const resetFormState = () => {
+    setMealText('');
+    setParseResult(null);
+    setLogged(false);
+    setFormError('');
+    setSearchQuery('');
+    setSearchResults([]);
+    setSelectedFood(null);
+    setQuantity(1);
+    setEntryMode('text');
+  };
+
+  const handleAddWater = async (ml: number) => {
+    try {
+      await createWaterLog({ amount: ml });
+      const updated = await getWaterSummary(todayStr());
+      setWater(updated);
+    } catch {}
+  };
+
+  const handleDeleteWater = async (id: number) => {
+    try {
+      await deleteWaterLog(id);
+      const updated = await getWaterSummary(todayStr());
+      setWater(updated);
+    } catch {}
+  };
+
   if (loading) return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center">
       <div className="w-12 h-12 border-4 border-slate-200 border-t-emerald-600 rounded-full animate-spin" />
@@ -207,9 +288,10 @@ export default function Dashboard() {
                 <LayoutDashboard className="w-5 h-5 text-white" />
               </div>
               <h1 className="text-xl font-black text-slate-900">Track <span className={theme.text}>&</span> Treat</h1>
+              <div className="hidden sm:block ml-4"><AppNav /></div>
             </div>
             <div className="flex items-center gap-4">
-              <div className={`px-4 py-1.5 rounded-full border ${theme.border} bg-white flex items-center gap-2 shadow-sm`}>
+              <div className={`hidden sm:flex px-4 py-1.5 rounded-full border ${theme.border} bg-white items-center gap-2 shadow-sm`}>
                 <div className={`w-2 h-2 rounded-full ${theme.bg} animate-pulse`} />
                 <span className={`text-[10px] font-black uppercase tracking-widest ${theme.text}`}>{theme.label}</span>
               </div>
@@ -245,7 +327,7 @@ export default function Dashboard() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               {[
                 { icon: <Flame className="text-orange-600" />, bg: 'bg-orange-50', label: 'Calories', val: `${totalCals}`, target: `${targetCals}`, pct: Math.min(100, (totalCals / targetCals) * 100), color: 'bg-orange-500' },
-                { icon: <Droplets className="text-sky-600" />, bg: 'bg-sky-50', label: 'Remaining', val: `${dailyProgress?.remaining ?? targetCals}`, target: 'kcal left', pct: Math.min(100, ((dailyProgress?.remaining ?? targetCals) / targetCals) * 100), color: 'bg-sky-500' },
+                { icon: <Droplets className="text-sky-600" />, bg: 'bg-sky-50', label: 'Water', val: `${water ? (water.totalMl / 1000).toFixed(1) : '0'}L`, target: `${water ? (water.target / 1000).toFixed(1) : '2.5'}L`, pct: water?.percentage ?? 0, color: 'bg-sky-500' },
                 { icon: <History className="text-emerald-600" />, bg: 'bg-emerald-50', label: 'Score', val: `${dailyProgress?.percentage ?? 0}%`, target: 'Adherence', pct: dailyProgress?.percentage ?? 0, color: 'bg-emerald-500' },
               ].map((c, i) => (
                 <div key={i} className="bg-white p-7 rounded-[2rem] border border-slate-100 shadow-sm hover:shadow-lg transition-all">
@@ -260,6 +342,70 @@ export default function Dashboard() {
                   </div>
                 </div>
               ))}
+            </div>
+
+            {/* Water Intake */}
+            <div className="bg-white rounded-[2.5rem] border border-slate-100 shadow-sm p-6 space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-black text-slate-900 flex items-center gap-2"><Droplets className="w-4 h-4 text-sky-500" /> Water Intake</h3>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-slate-400">{water ? `${(water.totalMl / 1000).toFixed(1)} / ${(water.target / 1000).toFixed(1)}L` : '0L'}</span>
+                  <button onClick={() => setShowWaterStepper(!showWaterStepper)}
+                    className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all active:scale-90 cursor-pointer ${showWaterStepper ? 'bg-sky-500 text-white' : 'bg-sky-50 text-sky-600 hover:bg-sky-100'}`}
+                  >
+                    {showWaterStepper ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Progress bar */}
+              <div className="h-2.5 bg-sky-100 rounded-full overflow-hidden">
+                <div className="h-full bg-sky-500 rounded-full transition-all duration-500" style={{ width: `${Math.min(100, water?.percentage ?? 0)}%` }} />
+              </div>
+
+              {/* Stepper popup — only when toggled */}
+              <AnimatePresence>
+                {showWaterStepper && (
+                  <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden space-y-3">
+                    {/* Stepper */}
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => setCustomWaterAmt(Math.max(50, customWaterAmt - 50))} className="w-10 h-10 bg-sky-50 text-sky-700 rounded-xl hover:bg-sky-100 transition-all active:scale-90 cursor-pointer flex items-center justify-center">
+                        <Minus className="w-4 h-4" />
+                      </button>
+                      <div className="flex-1 text-center">
+                        <span className="text-2xl font-black text-sky-700">{customWaterAmt}</span>
+                        <span className="text-xs font-bold text-sky-400 ml-1">ml</span>
+                      </div>
+                      <button onClick={() => setCustomWaterAmt(Math.min(2000, customWaterAmt + 50))} className="w-10 h-10 bg-sky-50 text-sky-700 rounded-xl hover:bg-sky-100 transition-all active:scale-90 cursor-pointer flex items-center justify-center">
+                        <Plus className="w-4 h-4" />
+                      </button>
+                      <button onClick={() => { handleAddWater(customWaterAmt); setShowWaterStepper(false); }} className="px-5 h-10 bg-sky-500 text-white rounded-xl font-bold text-sm hover:bg-sky-600 transition-all active:scale-95 cursor-pointer flex items-center gap-1.5">
+                        <Droplets className="w-3.5 h-3.5" /> Add
+                      </button>
+                    </div>
+                    {/* Quick presets */}
+                    <div className="flex gap-2">
+                      {[250, 500, 750].map((ml) => (
+                        <button key={ml} onClick={() => { handleAddWater(ml); setShowWaterStepper(false); }} className="flex-1 py-2 bg-sky-50 text-sky-600 rounded-lg font-bold text-xs hover:bg-sky-100 transition-all active:scale-95 cursor-pointer">
+                          +{ml}ml
+                        </button>
+                      ))}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* Logged entries */}
+              {water && water.logs.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {water.logs.map((log) => (
+                    <span key={log.id} className="inline-flex items-center gap-1 px-3 py-1 bg-sky-50 text-sky-700 rounded-full text-xs font-bold">
+                      {Number(log.amount)}ml
+                      <button onClick={() => handleDeleteWater(log.id)} className="hover:text-red-500 cursor-pointer"><X className="w-3 h-3" /></button>
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Macro Pie Chart */}
@@ -301,117 +447,171 @@ export default function Dashboard() {
                         <div className={`w-8 h-8 ${theme.bg} rounded-lg flex items-center justify-center`}><Utensils className="w-4 h-4 text-white" /></div>
                         Log a Meal
                       </h3>
-                      <button onClick={() => { setShowMealForm(false); setParseResult(null); setFormError(''); }} className="text-slate-400 hover:text-slate-900 cursor-pointer"><X /></button>
+                      <button onClick={() => { setShowMealForm(false); resetFormState(); }} className="text-slate-400 hover:text-slate-900 cursor-pointer"><X /></button>
                     </div>
 
                     {/* Meal Type Selector */}
                     <div className="grid grid-cols-4 gap-2">
                       {(['breakfast', 'lunch', 'dinner', 'snack'] as MealType[]).map((mt) => (
-                        <button
-                          key={mt}
-                          type="button"
-                          onClick={() => setMealType(mt)}
-                          className={`py-3 rounded-xl font-bold text-sm transition-all active:scale-95 cursor-pointer ${mealType === mt
-                            ? 'bg-emerald-600 text-white shadow-md'
-                            : 'bg-slate-50 text-slate-500 hover:bg-slate-100'
-                            }`}
+                        <button key={mt} type="button" onClick={() => setMealType(mt)}
+                          className={`py-3 rounded-xl font-bold text-sm transition-all active:scale-95 cursor-pointer ${mealType === mt ? 'bg-emerald-600 text-white shadow-md' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'}`}
                         >
                           {MEAL_TYPE_EMOJI[mt]} {MEAL_TYPE_LABELS[mt]}
                         </button>
                       ))}
                     </div>
 
-                    {/* Text Input */}
-                    <div className="space-y-4">
-                      <input
-                        value={mealText}
-                        onChange={(e) => { setMealText(e.target.value); setParseResult(null); setFormError(''); }}
-                        placeholder="e.g. 200g chicken and 100g rice..."
-                        className="w-full px-7 py-5 bg-slate-50 border-2 border-transparent rounded-[1.5rem] focus:bg-white focus:border-emerald-500 outline-none transition-all font-bold text-slate-900"
-                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleParseText(); } }}
-                      />
-                      <button
-                        onClick={handleParseText}
-                        disabled={!mealText.trim() || analyzing}
-                        className={`w-full py-5 ${theme.bg} text-white rounded-2xl font-black flex items-center justify-center gap-3 transition-all cursor-pointer disabled:opacity-50`}
-                      >
-                        {analyzing ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Zap className="w-4 h-4" />}
-                        {analyzing ? 'Analyzing...' : 'Analyze & Log'}
+                    {/* Entry Mode Tabs */}
+                    <div className="flex bg-slate-100 rounded-xl p-1 gap-1">
+                      <button onClick={() => setEntryMode('text')} className={`flex-1 py-2.5 rounded-lg font-bold text-sm transition-all cursor-pointer flex items-center justify-center gap-2 ${entryMode === 'text' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                        <Zap className="w-4 h-4" /> Describe
+                      </button>
+                      <button onClick={() => setEntryMode('search')} className={`flex-1 py-2.5 rounded-lg font-bold text-sm transition-all cursor-pointer flex items-center justify-center gap-2 ${entryMode === 'search' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                        <Search className="w-4 h-4" /> Search Food
                       </button>
                     </div>
 
                     {formError && (
-                      <div className="p-4 bg-red-50 border border-red-200 text-red-700 rounded-2xl text-sm font-medium">
-                        {formError}
-                      </div>
+                      <div className="p-4 bg-red-50 border border-red-200 text-red-700 rounded-2xl text-sm font-medium">{formError}</div>
                     )}
 
-                    {/* Parse Result */}
-                    {parseResult && (
-                      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-slate-50 rounded-[2rem] p-8 border border-slate-100 space-y-6">
-                        {parseResult.logged.length > 0 && (
-                          <>
-                            <div>
-                              <p className="text-xs font-black uppercase tracking-widest text-emerald-600 mb-3">Logged Items</p>
-                              <div className="space-y-2">
-                                {parseResult.logged.map((log: MealLog) => (
-                                  <div key={log.id} className="flex items-center justify-between p-4 bg-white rounded-xl">
-                                    <div>
-                                      <p className="font-bold text-slate-900 text-sm">{log.foodItem.name}</p>
-                                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
-                                        {log.quantity}x {log.foodItem.servingSize}{log.foodItem.servingUnit}
-                                      </p>
-                                    </div>
-                                    <div className="flex items-center gap-4">
+                    {/* ── TEXT MODE ── */}
+                    {entryMode === 'text' && (
+                      <div className="space-y-4">
+                        <input
+                          value={mealText}
+                          onChange={(e) => { setMealText(e.target.value); setParseResult(null); setFormError(''); }}
+                          placeholder="e.g. 200g chicken and 100g rice..."
+                          className="w-full px-7 py-5 bg-slate-50 border-2 border-transparent rounded-[1.5rem] focus:bg-white focus:border-emerald-500 outline-none transition-all font-bold text-slate-900"
+                          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleParseText(); } }}
+                        />
+                        <button onClick={handleParseText} disabled={!mealText.trim() || analyzing}
+                          className={`w-full py-5 ${theme.bg} text-white rounded-2xl font-black flex items-center justify-center gap-3 transition-all cursor-pointer disabled:opacity-50`}
+                        >
+                          {analyzing ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Zap className="w-4 h-4" />}
+                          {analyzing ? 'Analyzing...' : 'Analyze & Log'}
+                        </button>
+
+                        {parseResult && (
+                          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-slate-50 rounded-[2rem] p-6 border border-slate-100 space-y-5">
+                            {parseResult.logged.length > 0 && (
+                              <>
+                                <div className="space-y-2">
+                                  <p className="text-xs font-black uppercase tracking-widest text-emerald-600 mb-2">Logged Items</p>
+                                  {parseResult.logged.map((log: MealLog) => (
+                                    <div key={log.id} className="flex items-center justify-between p-4 bg-white rounded-xl">
+                                      <div>
+                                        <p className="font-bold text-slate-900 text-sm">{log.foodItem.name}</p>
+                                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{log.quantity}x {log.foodItem.servingSize}{log.foodItem.servingUnit}</p>
+                                      </div>
                                       <div className="text-right">
                                         <p className="font-black text-slate-900">{Math.round(Number(log.calories))} <span className="text-[10px]">kcal</span></p>
                                         <p className="text-[10px] text-slate-400">{Math.round(Number(log.protein))}p / {Math.round(Number(log.carbs))}c / {Math.round(Number(log.fat))}f</p>
                                       </div>
                                     </div>
-                                  </div>
-                                ))}
+                                  ))}
+                                </div>
+                                <button onClick={handleLogSuccess} className={`w-full py-5 bg-emerald-600 text-white rounded-2xl font-black flex items-center justify-center gap-3 cursor-pointer ${logged ? 'bg-emerald-500' : ''}`}>
+                                  {logged ? <CheckCircle2 /> : <CheckCircle2 className="w-5 h-5" />}
+                                  {logged ? 'Saved!' : 'Done'}
+                                </button>
+                              </>
+                            )}
+                            {parseResult.unresolved && (
+                              <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl">
+                                <p className="text-amber-700 text-sm font-bold mb-1">Could not identify:</p>
+                                <p className="text-amber-600 text-xs">{parseResult.unresolved.items.join(', ')}</p>
+                              </div>
+                            )}
+                            {parseResult.logged.length === 0 && parseResult.unresolved && (
+                              <p className="text-center py-2 text-slate-500 font-bold text-sm">No food items recognized.</p>
+                            )}
+                          </motion.div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* ── SEARCH MODE ── */}
+                    {entryMode === 'search' && (
+                      <div className="space-y-4">
+                        {/* Search bar */}
+                        <div className="flex gap-2">
+                          <input
+                            value={searchQuery}
+                            onChange={(e) => { setSearchQuery(e.target.value); setFormError(''); }}
+                            placeholder="Search food database..."
+                            className="flex-1 px-6 py-4 bg-slate-50 border-2 border-transparent rounded-xl focus:bg-white focus:border-emerald-500 outline-none transition-all font-bold text-slate-900"
+                            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleFoodSearch(); } }}
+                          />
+                          <button onClick={handleFoodSearch} disabled={!searchQuery.trim() || searching}
+                            className="px-5 bg-emerald-600 text-white rounded-xl font-black hover:bg-emerald-700 transition-all cursor-pointer disabled:opacity-50 flex items-center gap-2"
+                          >
+                            {searching ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Search className="w-4 h-4" />}
+                          </button>
+                        </div>
+
+                        {/* Selected food detail + quantity */}
+                        {selectedFood && (
+                          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-emerald-50 border border-emerald-200 rounded-2xl p-5 space-y-4">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <p className="font-black text-slate-900">{selectedFood.name}</p>
+                                <p className="text-xs text-slate-500 font-bold">{selectedFood.servingSize}{selectedFood.servingUnit} per serving &middot; {selectedFood.calories} kcal</p>
+                              </div>
+                              <button onClick={() => setSelectedFood(null)} className="text-slate-400 hover:text-slate-900 cursor-pointer"><X className="w-4 h-4" /></button>
+                            </div>
+                            <div className="flex items-center gap-4">
+                              <span className="text-xs font-black uppercase tracking-widest text-slate-400">Servings</span>
+                              <div className="flex items-center gap-2 bg-white rounded-xl p-1">
+                                <button onClick={() => setQuantity(Math.max(0.25, quantity - 0.25))} className="p-2 hover:bg-slate-50 rounded-lg cursor-pointer"><Minus className="w-4 h-4 text-slate-600" /></button>
+                                <span className="w-12 text-center font-black text-slate-900">{quantity}</span>
+                                <button onClick={() => setQuantity(quantity + 0.25)} className="p-2 hover:bg-slate-50 rounded-lg cursor-pointer"><Plus className="w-4 h-4 text-slate-600" /></button>
+                              </div>
+                              <div className="flex-1 text-right text-sm font-bold text-slate-500">
+                                = {Math.round(Number(selectedFood.calories) * quantity)} kcal
                               </div>
                             </div>
-
-                            {/* Summary totals */}
-                            <div className="grid grid-cols-4 gap-3">
+                            <div className="grid grid-cols-4 gap-2 text-center">
                               {[
-                                { l: 'Calories', v: parseResult.logged.reduce((s: number, l: MealLog) => s + Number(l.calories), 0), u: 'kcal', c: 'text-orange-600' },
-                                { l: 'Protein', v: parseResult.logged.reduce((s: number, l: MealLog) => s + Number(l.protein), 0), u: 'g', c: 'text-emerald-600' },
-                                { l: 'Carbs', v: parseResult.logged.reduce((s: number, l: MealLog) => s + Number(l.carbs), 0), u: 'g', c: 'text-amber-600' },
-                                { l: 'Fat', v: parseResult.logged.reduce((s: number, l: MealLog) => s + Number(l.fat), 0), u: 'g', c: 'text-slate-600' },
-                              ].map((item, id) => (
-                                <div key={id} className="text-center">
-                                  <p className={`text-xl font-black ${item.c}`}>{Math.round(item.v)}<span className="text-[10px] ml-1">{item.u}</span></p>
-                                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{item.l}</p>
-                                </div>
+                                { l: 'Cal', v: Math.round(Number(selectedFood.calories) * quantity), c: 'text-orange-600' },
+                                { l: 'Prot', v: Math.round(Number(selectedFood.protein) * quantity), c: 'text-emerald-600' },
+                                { l: 'Carbs', v: Math.round(Number(selectedFood.carbs) * quantity), c: 'text-amber-600' },
+                                { l: 'Fat', v: Math.round(Number(selectedFood.fat) * quantity), c: 'text-slate-600' },
+                              ].map((s, i) => (
+                                <div key={i}><p className={`font-black ${s.c}`}>{s.v}</p><p className="text-[9px] font-bold text-slate-400 uppercase">{s.l}</p></div>
                               ))}
                             </div>
-
-                            <button
-                              onClick={handleLogSuccess}
-                              className={`w-full py-5 bg-emerald-600 text-white rounded-2xl font-black flex items-center justify-center gap-3 transition-all cursor-pointer ${logged ? 'bg-emerald-500' : ''}`}
+                            <button onClick={handleManualLog} disabled={manualLogging}
+                              className={`w-full py-4 bg-emerald-600 text-white rounded-xl font-black flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 ${logged ? 'bg-emerald-500' : ''}`}
                             >
-                              {logged ? <CheckCircle2 /> : <CheckCircle2 className="w-5 h-5" />}
-                              {logged ? 'Saved!' : 'Done'}
+                              {logged ? <CheckCircle2 className="w-5 h-5" /> : manualLogging ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <PlusCircle className="w-5 h-5" />}
+                              {logged ? 'Logged!' : manualLogging ? 'Logging...' : 'Log This Meal'}
                             </button>
-                          </>
+                          </motion.div>
                         )}
 
-                        {parseResult.unresolved && (
-                          <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl">
-                            <p className="text-amber-700 text-sm font-bold mb-1">Some items could not be identified:</p>
-                            <p className="text-amber-600 text-xs">{parseResult.unresolved.items.join(', ')}</p>
-                            <p className="text-[10px] text-amber-500 font-bold uppercase tracking-widest mt-2">Tip: Try simpler names like "chicken", "rice", "eggs"</p>
+                        {/* Search results list */}
+                        {!selectedFood && searchResults.length > 0 && (
+                          <div className="max-h-[300px] overflow-y-auto space-y-2 pr-1">
+                            {searchResults.map((food) => (
+                              <button key={food.id} onClick={() => { setSelectedFood(food); setQuantity(1); }}
+                                className="w-full flex items-center justify-between p-4 bg-slate-50 rounded-xl hover:bg-slate-100 transition-all cursor-pointer text-left"
+                              >
+                                <div>
+                                  <p className="font-bold text-slate-900 text-sm">{food.name}</p>
+                                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
+                                    {food.servingSize}{food.servingUnit} &middot; {food.category || 'Uncategorized'}
+                                  </p>
+                                </div>
+                                <div className="text-right shrink-0 ml-4">
+                                  <p className="font-black text-slate-900 text-sm">{food.calories} <span className="text-[10px]">kcal</span></p>
+                                  <p className="text-[10px] text-slate-400">{food.protein}p / {food.carbs}c / {food.fat}f</p>
+                                </div>
+                              </button>
+                            ))}
                           </div>
                         )}
-
-                        {parseResult.logged.length === 0 && parseResult.unresolved && (
-                          <div className="text-center py-4">
-                            <p className="text-slate-500 font-bold mb-2">Could not identify any food items.</p>
-                          </div>
-                        )}
-                      </motion.div>
+                      </div>
                     )}
                   </motion.div>
                 )}
@@ -465,15 +665,15 @@ export default function Dashboard() {
           <div className="space-y-6">
             <div className={`p-8 rounded-[2.5rem] text-white shadow-2xl relative overflow-hidden group transition-all duration-500 ${theme.bg}`}>
               <div className="absolute -bottom-10 -right-10 w-40 h-40 bg-white/10 rounded-full blur-3xl group-hover:scale-150 transition-all duration-700" />
-              <h3 className="text-lg font-black mb-6 relative z-10 flex items-center gap-2"><Target className="w-5 h-5" />Adaptive Goals</h3>
+              <h3 className="text-lg font-black mb-6 relative z-10 flex items-center gap-2"><Target className="w-5 h-5" />Daily Targets</h3>
               <div className="space-y-4 relative z-10">
                 {[
-                  { l: 'Protein', v: `${targetMacros.protein}g`, c: 'text-emerald-400' },
-                  { l: 'Carbs', v: `${targetMacros.carbs}g`, c: 'text-amber-400' },
-                  { l: 'Fats', v: `${targetMacros.fat}g`, c: 'text-orange-400' },
+                  { l: 'Protein', v: `${targetMacros.protein}`, u: 'g', c: 'text-emerald-400' },
+                  { l: 'Carbs', v: `${targetMacros.carbs}`, u: 'g', c: 'text-amber-400' },
+                  { l: 'Fats', v: `${targetMacros.fat}`, u: 'g', c: 'text-orange-400' },
                 ].map((s, i) => (
                   <div key={i} className="bg-white/10 p-4 rounded-2xl border border-white/5 flex justify-between items-center">
-                    <div><p className="text-[10px] font-black uppercase tracking-widest text-white/50">{s.l}</p><p className="text-xl font-black">{s.v}</p></div>
+                    <div><p className="text-[10px] font-black uppercase tracking-widest text-white/50">{s.l}</p><p className="text-xl font-black">{s.v}<span className="text-sm font-bold opacity-60 ml-1">{s.u}</span></p></div>
                     <div className={`w-2 h-2 rounded-full ${s.c} bg-current opacity-80`} />
                   </div>
                 ))}
@@ -481,21 +681,39 @@ export default function Dashboard() {
             </div>
 
             <div className="bg-white rounded-[2.5rem] p-8 border border-slate-100 shadow-sm space-y-4">
-              <h3 className="text-sm font-black uppercase tracking-widest text-slate-400">System Insights</h3>
-              <div className="flex items-start gap-4 p-4 bg-slate-50 rounded-2xl">
-                <TrendingUp className="w-5 h-5 text-emerald-600 shrink-0" />
-                <div>
-                  <p className="text-xs font-black text-slate-900 mb-1">State Machine Active</p>
-                  <p className="text-[10px] font-medium text-slate-500">Currently in {theme.label} mode.</p>
-                </div>
+              <h3 className="text-sm font-black uppercase tracking-widest text-slate-400">Today&apos;s Progress</h3>
+              <div className="space-y-3">
+                {[
+                  { l: 'Protein', consumed: Math.round(dailyProgress?.macros.protein ?? 0), target: targetMacros.protein, u: 'g' },
+                  { l: 'Carbs', consumed: Math.round(dailyProgress?.macros.carbs ?? 0), target: targetMacros.carbs, u: 'g' },
+                  { l: 'Fat', consumed: Math.round(dailyProgress?.macros.fat ?? 0), target: targetMacros.fat, u: 'g' },
+                ].map((m, i) => {
+                  const pct = m.target > 0 ? Math.min(100, (m.consumed / m.target) * 100) : 0;
+                  return (
+                    <div key={i}>
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="text-xs font-bold text-slate-500">{m.l}</span>
+                        <span className="text-xs font-bold text-slate-400">{m.consumed} / {m.target}{m.u}</span>
+                      </div>
+                      <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                        <div className="h-full bg-emerald-500 rounded-full transition-all duration-500" style={{ width: `${pct}%` }} />
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest leading-loose">
+              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest leading-loose mt-2">
                 Meals logged: <span className="text-emerald-500 px-2 bg-emerald-50 rounded-md">{dailyProgress?.logCount ?? 0}</span>
               </p>
             </div>
           </div>
         </div>
       </main>
+
+      {/* Mobile bottom nav */}
+      <div className="sm:hidden pb-20">
+        <AppNav />
+      </div>
     </motion.div>
   );
 }
