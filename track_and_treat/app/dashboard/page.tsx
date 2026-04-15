@@ -2,9 +2,9 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
-  LayoutDashboard, Flame, Droplets, Scale, History,
-  PlusCircle, LogOut, TrendingUp, X, Trash2, Search, Minus, Plus,
-  Utensils, Clock, Zap, Target, CheckCircle2, PieChart as PieChartIcon
+  LayoutDashboard, Flame, Droplets, Scale, History, CalendarCheck,
+  PlusCircle, LogOut, TrendingUp, X, Trash2, Search, Minus, Plus, ChevronDown,
+  Utensils, Clock, Zap, Target, CheckCircle2, PieChart as PieChartIcon, Coffee, Sun, Moon, Popcorn, Brain, RefreshCw
 } from "lucide-react";
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -12,15 +12,17 @@ import {
   PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip,
 } from 'recharts';
 
-import { calculateMacros, getStrictnessLevel, StrictnessLevel } from '@/lib/algorithms/nutrition-logic';
+import { calculateMacros } from '@/lib/algorithms/nutrition-logic';
 import { useAuth } from '@/lib/auth-context';
 import { AppNav } from '@/components/app-nav';
 import {
   getStats, getDailyProgress, parseText, deleteMealLog,
   searchFood, createMealLog,
   createWaterLog, getWaterSummary, deleteWaterLog,
+  getCurrentAdaptiveProfile, computeAdaptiveProfileApi,
   ApiError,
   type MealLog, type MealType, type DailyProgress, type FoodItem, type WaterSummary,
+  type StrictnessLevel, type Quadrant, type AdaptiveProfileData,
 } from '@/lib/api';
 
 const MEAL_TYPE_LABELS: Record<MealType, string> = {
@@ -57,11 +59,15 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [targetCals, setTargetCals] = useState(2100);
   const [targetMacros, setTargetMacros] = useState({ protein: 120, carbs: 250, fat: 70 });
-  const [strictness, setStrictness] = useState<StrictnessLevel>('MODERATE');
+  const [strictness, setStrictness] = useState<StrictnessLevel>('moderate');
+  const [quadrant, setQuadrant] = useState<Quadrant | null>(null);
+  const [adaptiveProfile, setAdaptiveProfile] = useState<AdaptiveProfileData | null>(null);
+  const [computingProfile, setComputingProfile] = useState(false);
 
   // Meal data from API
   const [dailyProgress, setDailyProgress] = useState<DailyProgress | null>(null);
   const [allMealLogs, setAllMealLogs] = useState<MealLog[]>([]);
+  const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
   const [water, setWater] = useState<WaterSummary | null>(null);
   const [customWaterAmt, setCustomWaterAmt] = useState(250);
   const [showWaterStepper, setShowWaterStepper] = useState(false);
@@ -86,13 +92,15 @@ export default function Dashboard() {
 
   const loadDashboardData = useCallback(async () => {
     try {
-      const [stats, progress, waterData] = await Promise.all([
+      const [stats, progress, waterData, profile] = await Promise.all([
         getStats(),
         getDailyProgress(todayStr()),
         getWaterSummary(todayStr()).catch(() => null),
+        getCurrentAdaptiveProfile().catch(() => null),
       ]);
 
       setWater(waterData);
+      setAdaptiveProfile(profile);
 
       if (stats.targetCalories) {
         setTargetCals(Math.round(stats.targetCalories));
@@ -128,29 +136,43 @@ export default function Dashboard() {
     loadDashboardData();
   }, [router, authLoading, isAuthenticated, loadDashboardData]);
 
-  // Derived stats
+  // Derived stats — from backend
   const totalCals = dailyProgress?.consumed ?? 0;
-  const adherence = targetCals > 0 ? totalCals / targetCals : 0;
+  const outcomeScore = dailyProgress?.outcomeScore ?? 0;
+  const planAdherence = dailyProgress?.planAdherence;
 
   useEffect(() => {
-    const history = [adherence];
-    setStrictness(getStrictnessLevel(history));
-  }, [adherence]);
+    if (dailyProgress?.strictness) {
+      setStrictness(dailyProgress.strictness);
+    }
+    if (dailyProgress?.quadrant) {
+      setQuadrant(dailyProgress.quadrant);
+    }
+  }, [dailyProgress]);
+
+  const calRatio = targetCals > 0 ? totalCals / targetCals : 0;
+
+  const QUADRANT_LABELS: Record<string, { title: string; desc: string; emoji: string }> = {
+    ideal: { title: 'On Track', desc: 'You\'re following the plan and hitting your goals.', emoji: '🎯' },
+    plan_wrong: { title: 'Plan Adjusting', desc: 'Your discipline is great — we\'re recalibrating the plan for you.', emoji: '🔧' },
+    self_directed: { title: 'Self-Directed', desc: 'You\'re hitting goals your own way. Keep it up.', emoji: '🧭' },
+    struggling: { title: 'Building Habits', desc: 'One step at a time. Focus on one small win today.', emoji: '💪' },
+  };
 
   const theme = useMemo(() => {
-    if (adherence > 1.25) return {
+    if (calRatio > 1.25) return {
       primary: 'red', bg: 'bg-red-900', text: 'text-red-800', border: 'border-red-200', label: 'Corrective Mode'
     };
-    if (strictness === 'STRICT') return {
+    if (strictness === 'strict') return {
       primary: 'emerald', bg: 'bg-emerald-600', text: 'text-emerald-600', border: 'border-emerald-100', label: 'Strict Focus'
     };
-    if (strictness === 'LENIENT') return {
-      primary: 'violet', bg: 'bg-violet-600', text: 'text-violet-600', border: 'border-violet-100', label: 'Flexible Reward'
+    if (strictness === 'lenient') return {
+      primary: 'violet', bg: 'bg-violet-600', text: 'text-violet-600', border: 'border-violet-100', label: 'Flexible Mode'
     };
     return {
       primary: 'slate', bg: 'bg-slate-900', text: 'text-slate-900', border: 'border-slate-100', label: 'Balanced'
     };
-  }, [strictness, adherence]);
+  }, [strictness, calRatio]);
 
   const macroData = useMemo(() => {
     if (!dailyProgress) return [];
@@ -162,6 +184,55 @@ export default function Dashboard() {
       { name: 'Fat', value: Math.round(fat), color: '#6366f1' },
     ];
   }, [dailyProgress]);
+
+  // Group meal logs: grouped items show as one card, ungrouped as individual
+  interface MealGroup {
+    key: string;
+    name: string;
+    mealType: MealType;
+    items: MealLog[];
+    totals: { calories: number; protein: number; carbs: number; fat: number };
+    createdAt: string;
+  }
+
+  const groupedMeals = useMemo(() => {
+    const groups: MealGroup[] = [];
+    const groupMap = new Map<string, MealGroup>();
+
+    for (const log of allMealLogs) {
+      if (log.groupId) {
+        if (!groupMap.has(log.groupId)) {
+          const group: MealGroup = {
+            key: log.groupId,
+            name: log.groupName || 'Meal',
+            mealType: log.mealType as MealType,
+            items: [],
+            totals: { calories: 0, protein: 0, carbs: 0, fat: 0 },
+            createdAt: log.createdAt,
+          };
+          groupMap.set(log.groupId, group);
+          groups.push(group);
+        }
+        const g = groupMap.get(log.groupId)!;
+        g.items.push(log);
+        g.totals.calories += Number(log.calories);
+        g.totals.protein += Number(log.protein);
+        g.totals.carbs += Number(log.carbs);
+        g.totals.fat += Number(log.fat);
+      } else {
+        groups.push({
+          key: `single-${log.id}`,
+          name: log.foodItem?.name || 'Unknown',
+          mealType: log.mealType as MealType,
+          items: [log],
+          totals: { calories: Number(log.calories), protein: Number(log.protein), carbs: Number(log.carbs), fat: Number(log.fat) },
+          createdAt: log.createdAt,
+        });
+      }
+    }
+
+    return groups.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }, [allMealLogs]);
 
   // --- Handlers ---
 
@@ -241,6 +312,18 @@ export default function Dashboard() {
     }
   };
 
+  const handleComputeProfile = async () => {
+    setComputingProfile(true);
+    try {
+      const profile = await computeAdaptiveProfileApi();
+      setAdaptiveProfile(profile);
+      setQuadrant(profile.quadrant);
+      setStrictness(profile.strictnessLevel);
+      await loadDashboardData();
+    } catch {}
+    finally { setComputingProfile(false); }
+  };
+
   const resetFormState = () => {
     setMealText('');
     setParseResult(null);
@@ -307,28 +390,38 @@ export default function Dashboard() {
           <div className="absolute top-0 right-0 w-80 h-80 bg-white/10 rounded-full -mr-16 -mt-16 blur-3xl" />
           <div className="relative flex flex-col md:flex-row items-center gap-6 text-center md:text-left">
             <div className="w-16 h-16 bg-white/20 backdrop-blur-md rounded-2xl flex items-center justify-center text-2xl shadow-lg leading-none">
-              {adherence > 1.25 ? '⚠️' : strictness === 'STRICT' ? '🔒' : strictness === 'LENIENT' ? '🔓' : '⚖️'}
+              {calRatio > 1.25 ? '⚠️' : quadrant ? QUADRANT_LABELS[quadrant]?.emoji || '⚖️' : '⚖️'}
             </div>
             <div>
               <h2 className="text-3xl font-black mb-1">
-                {adherence > 1.25 ? 'Corrective Discipline' : strictness === 'STRICT' ? 'Discipline is Key!' : strictness === 'LENIENT' ? 'Flexibility Earned!' : 'Balanced Living'}
+                {calRatio > 1.25 ? 'Corrective Mode' : quadrant ? QUADRANT_LABELS[quadrant]?.title : theme.label}
               </h2>
               <p className="opacity-70 font-medium max-w-lg">
-                {adherence > 1.25 ? 'Significant overeating detected. Switching to Corrective Mode to recalibrate.' :
-                  `Your algorithm is in ${theme.label} mode based on recent analysis.`}
+                {calRatio > 1.25
+                  ? 'Significant overeating detected. Recalibrating.'
+                  : quadrant
+                    ? QUADRANT_LABELS[quadrant]?.desc
+                    : `${theme.label} mode. Log meals to build your adaptive profile.`}
               </p>
             </div>
+            {dailyProgress?.pressureScore != null && (
+              <div className="md:ml-auto text-center">
+                <p className="text-3xl font-black">{Math.round(dailyProgress.pressureScore)}</p>
+                <p className="text-[10px] font-bold opacity-60 uppercase tracking-widest">Pressure</p>
+              </div>
+            )}
           </div>
         </motion.div>
 
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
           <div className="lg:col-span-3 space-y-8">
             {/* Stat Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
               {[
                 { icon: <Flame className="text-orange-600" />, bg: 'bg-orange-50', label: 'Calories', val: `${totalCals}`, target: `${targetCals}`, pct: Math.min(100, (totalCals / targetCals) * 100), color: 'bg-orange-500' },
                 { icon: <Droplets className="text-sky-600" />, bg: 'bg-sky-50', label: 'Water', val: `${water ? (water.totalMl / 1000).toFixed(1) : '0'}L`, target: `${water ? (water.target / 1000).toFixed(1) : '2.5'}L`, pct: water?.percentage ?? 0, color: 'bg-sky-500' },
-                { icon: <History className="text-emerald-600" />, bg: 'bg-emerald-50', label: 'Score', val: `${dailyProgress?.percentage ?? 0}%`, target: 'Adherence', pct: dailyProgress?.percentage ?? 0, color: 'bg-emerald-500' },
+                { icon: <Target className="text-emerald-600" />, bg: 'bg-emerald-50', label: 'Outcome', val: `${Math.round(outcomeScore * 100)}%`, target: 'vs Target', pct: Math.round(outcomeScore * 100), color: 'bg-emerald-500' },
+                { icon: <CalendarCheck className="text-violet-600" />, bg: 'bg-violet-50', label: 'Adherence', val: planAdherence != null ? `${Math.round(planAdherence * 100)}%` : '—', target: planAdherence != null ? 'vs Plan' : 'No plan', pct: planAdherence != null ? Math.round(planAdherence * 100) : 0, color: 'bg-violet-500' },
               ].map((c, i) => (
                 <div key={i} className="bg-white p-7 rounded-[2rem] border border-slate-100 shadow-sm hover:shadow-lg transition-all">
                   <div className="flex items-center justify-between mb-6">
@@ -343,6 +436,80 @@ export default function Dashboard() {
                 </div>
               ))}
             </div>
+
+            {/* Planned vs Actual Comparison */}
+            {dailyProgress?.plannedMeals && dailyProgress.plannedMeals.length > 0 && (
+              <div className="bg-white rounded-[2.5rem] border border-slate-100 shadow-sm p-8">
+                <h3 className="text-lg font-black text-slate-900 flex items-center gap-2 mb-6">
+                  <CalendarCheck className="w-5 h-5 text-violet-600" /> Plan vs Actual
+                </h3>
+
+                <div className="grid grid-cols-2 gap-4">
+                  {/* Planned */}
+                  <div>
+                    <p className="text-xs font-black uppercase tracking-widest text-violet-500 mb-3">Planned</p>
+                    <div className="space-y-2">
+                      {(() => {
+                        // Group planned items by recipeName
+                        const recipeMap = new Map<string, { name: string; mealType: string; items: typeof dailyProgress.plannedMeals; totalCal: number }>();
+                        for (const item of dailyProgress.plannedMeals!) {
+                          const key = `${item.mealType}::${item.recipeName || item.foodItem?.name || item.id}`;
+                          if (!recipeMap.has(key)) recipeMap.set(key, { name: item.recipeName || item.foodItem?.name || 'Meal', mealType: item.mealType, items: [], totalCal: 0 });
+                          const r = recipeMap.get(key)!;
+                          r.items!.push(item);
+                          r.totalCal += Number(item.calories);
+                        }
+                        return Array.from(recipeMap.values()).map((recipe, i) => {
+                          const mealIcons: Record<string, React.ReactNode> = { breakfast: <Coffee className="w-3 h-3" />, lunch: <Sun className="w-3 h-3" />, dinner: <Moon className="w-3 h-3" />, snack: <Popcorn className="w-3 h-3" /> };
+                          return (
+                            <div key={i} className="p-3 bg-violet-50 rounded-xl">
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className="text-violet-500">{mealIcons[recipe.mealType] || <Utensils className="w-3 h-3" />}</span>
+                                <p className="font-bold text-slate-800 text-sm truncate">{recipe.name}</p>
+                              </div>
+                              <p className="text-xs font-bold text-violet-400">{Math.round(recipe.totalCal)} kcal</p>
+                            </div>
+                          );
+                        });
+                      })()}
+                    </div>
+                    <div className="mt-3 p-2 bg-violet-50 rounded-lg text-center">
+                      <p className="text-sm font-black text-violet-600">
+                        {Math.round(dailyProgress.plannedMeals!.reduce((s, i) => s + Number(i.calories), 0))} kcal
+                      </p>
+                      <p className="text-[10px] font-bold text-violet-400">Total planned</p>
+                    </div>
+                  </div>
+
+                  {/* Actual */}
+                  <div>
+                    <p className="text-xs font-black uppercase tracking-widest text-emerald-500 mb-3">Actual</p>
+                    <div className="space-y-2">
+                      {groupedMeals.length > 0 ? groupedMeals.map((group) => {
+                        const mealIcons: Record<string, React.ReactNode> = { breakfast: <Coffee className="w-3 h-3" />, lunch: <Sun className="w-3 h-3" />, dinner: <Moon className="w-3 h-3" />, snack: <Popcorn className="w-3 h-3" /> };
+                        return (
+                          <div key={group.key} className="p-3 bg-emerald-50 rounded-xl">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-emerald-500">{mealIcons[group.mealType] || <Utensils className="w-3 h-3" />}</span>
+                              <p className="font-bold text-slate-800 text-sm truncate">{group.name}</p>
+                            </div>
+                            <p className="text-xs font-bold text-emerald-400">{Math.round(group.totals.calories)} kcal</p>
+                          </div>
+                        );
+                      }) : (
+                        <div className="p-4 bg-slate-50 rounded-xl text-center">
+                          <p className="text-xs text-slate-400 font-bold italic">No meals logged yet</p>
+                        </div>
+                      )}
+                    </div>
+                    <div className="mt-3 p-2 bg-emerald-50 rounded-lg text-center">
+                      <p className="text-sm font-black text-emerald-600">{totalCals} kcal</p>
+                      <p className="text-[10px] font-bold text-emerald-400">Total consumed</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Water Intake */}
             <div className="bg-white rounded-[2.5rem] border border-slate-100 shadow-sm p-6 space-y-3">
@@ -501,8 +668,8 @@ export default function Dashboard() {
                                   {parseResult.logged.map((log: MealLog) => (
                                     <div key={log.id} className="flex items-center justify-between p-4 bg-white rounded-xl">
                                       <div>
-                                        <p className="font-bold text-slate-900 text-sm">{log.foodItem.name}</p>
-                                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{log.quantity}x {log.foodItem.servingSize}{log.foodItem.servingUnit}</p>
+                                        <p className="font-bold text-slate-900 text-sm">{log.foodItem?.name || 'Food item'}</p>
+                                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{log.quantity}x {log.foodItem?.servingSize || ''}{log.foodItem?.servingUnit || ''}</p>
                                       </div>
                                       <div className="text-right">
                                         <p className="font-black text-slate-900">{Math.round(Number(log.calories))} <span className="text-[10px]">kcal</span></p>
@@ -622,41 +789,79 @@ export default function Dashboard() {
                 <h3 className="text-xl font-black text-slate-900 flex items-center gap-3">
                   <History className="w-6 h-6 text-emerald-600" />
                   Today&apos;s Meals
-                  {allMealLogs.length > 0 && (
-                    <span className="text-xs font-bold text-slate-400 bg-slate-100 px-3 py-1 rounded-full">{allMealLogs.length} items</span>
+                  {groupedMeals.length > 0 && (
+                    <span className="text-xs font-bold text-slate-400 bg-slate-100 px-3 py-1 rounded-full">{groupedMeals.length}</span>
                   )}
                 </h3>
-                {allMealLogs.length === 0 ? (
+                {groupedMeals.length === 0 ? (
                   <p className="text-center py-10 text-slate-400 font-bold uppercase tracking-widest italic">No meals logged today</p>
-                ) : allMealLogs.map((log) => (
-                  <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} key={log.id} className="flex items-center justify-between p-6 bg-slate-50 border border-transparent hover:border-slate-200 rounded-[1.5rem] group transition-all">
-                    <div className="flex items-center gap-4">
-                      <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center text-xl shadow-sm group-hover:scale-110 transition-all">
-                        {MEAL_TYPE_EMOJI[log.mealType as MealType] || '🍽️'}
-                      </div>
-                      <div>
-                        <p className="font-black text-slate-900">{log.foodItem?.name || 'Unknown item'}</p>
-                        <div className="flex gap-3 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                          <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> {timeAgo(log.createdAt)}</span>
-                          <span>{MEAL_TYPE_LABELS[log.mealType as MealType]}</span>
-                          <span>{Math.round(Number(log.protein))}g P</span>
+                ) : groupedMeals.map((group) => {
+                  const isMulti = group.items.length > 1;
+                  const isOpen = expandedGroup === group.key;
+                  return (
+                    <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} key={group.key} className="bg-slate-50 rounded-[1.5rem] overflow-hidden">
+                      {/* Main meal card */}
+                      <div
+                        className={`flex items-center justify-between p-6 ${isMulti ? 'cursor-pointer hover:bg-slate-100' : ''} transition-all group`}
+                        onClick={() => isMulti && setExpandedGroup(isOpen ? null : group.key)}
+                      >
+                        <div className="flex items-center gap-4">
+                          <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center text-xl shadow-sm group-hover:scale-110 transition-all">
+                            {MEAL_TYPE_EMOJI[group.mealType] || '🍽️'}
+                          </div>
+                          <div>
+                            <p className="font-black text-slate-900">{group.name}</p>
+                            <div className="flex gap-3 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                              <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> {timeAgo(group.createdAt)}</span>
+                              <span>{MEAL_TYPE_LABELS[group.mealType]}</span>
+                              {isMulti && <span>{group.items.length} items</span>}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <div className="text-right">
+                            <p className="text-lg font-black text-slate-900">{Math.round(group.totals.calories)} <span className="text-[10px]">kcal</span></p>
+                            <p className="text-[10px] text-slate-400 font-bold">{Math.round(group.totals.protein)}p / {Math.round(group.totals.carbs)}c / {Math.round(group.totals.fat)}f</p>
+                          </div>
+                          {isMulti ? (
+                            <ChevronDown className={`w-5 h-5 text-slate-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                          ) : (
+                            <button onClick={(e) => { e.stopPropagation(); handleDeleteMeal(group.items[0].id); }}
+                              className="p-2 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all cursor-pointer"><Trash2 className="w-4 h-4" /></button>
+                          )}
                         </div>
                       </div>
-                    </div>
-                    <div className="flex items-center gap-4">
-                      <div className="text-right">
-                        <p className="text-lg font-black text-slate-900">{Math.round(Number(log.calories))} <span className="text-[10px]">kcal</span></p>
-                      </div>
-                      <button
-                        onClick={() => handleDeleteMeal(log.id)}
-                        className="p-2 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all cursor-pointer"
-                        title="Delete"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </motion.div>
-                ))}
+
+                      {/* Expanded ingredients */}
+                      <AnimatePresence>
+                        {isOpen && isMulti && (
+                          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
+                            <div className="px-6 pb-4 space-y-2">
+                              {group.items.map((log) => (
+                                <div key={log.id} className="flex items-center justify-between p-3 bg-white rounded-xl group/item">
+                                  <div>
+                                    <p className="font-bold text-slate-800 text-sm">{log.foodItem?.name || 'Unknown'}</p>
+                                    <p className="text-[10px] text-slate-400 font-bold">
+                                      {Math.round(Number(log.quantity) * (parseFloat(log.foodItem?.servingSize) || 100))}{log.foodItem?.servingUnit || 'g'}
+                                    </p>
+                                  </div>
+                                  <div className="flex items-center gap-3">
+                                    <div className="text-right">
+                                      <p className="text-sm font-bold text-slate-700">{Math.round(Number(log.calories))} kcal</p>
+                                      <p className="text-[10px] text-slate-400">{Math.round(Number(log.protein))}p / {Math.round(Number(log.carbs))}c / {Math.round(Number(log.fat))}f</p>
+                                    </div>
+                                    <button onClick={() => handleDeleteMeal(log.id)}
+                                      className="p-1 text-slate-300 hover:text-red-500 opacity-0 group-hover/item:opacity-100 transition-all cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </motion.div>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -684,9 +889,9 @@ export default function Dashboard() {
               <h3 className="text-sm font-black uppercase tracking-widest text-slate-400">Today&apos;s Progress</h3>
               <div className="space-y-3">
                 {[
-                  { l: 'Protein', consumed: Math.round(dailyProgress?.macros.protein ?? 0), target: targetMacros.protein, u: 'g' },
-                  { l: 'Carbs', consumed: Math.round(dailyProgress?.macros.carbs ?? 0), target: targetMacros.carbs, u: 'g' },
-                  { l: 'Fat', consumed: Math.round(dailyProgress?.macros.fat ?? 0), target: targetMacros.fat, u: 'g' },
+                  { l: 'Protein', consumed: Math.round(dailyProgress?.macros.protein ?? 0), target: dailyProgress?.macroTargets?.protein ?? targetMacros.protein, u: 'g' },
+                  { l: 'Carbs', consumed: Math.round(dailyProgress?.macros.carbs ?? 0), target: dailyProgress?.macroTargets?.carbs ?? targetMacros.carbs, u: 'g' },
+                  { l: 'Fat', consumed: Math.round(dailyProgress?.macros.fat ?? 0), target: dailyProgress?.macroTargets?.fat ?? targetMacros.fat, u: 'g' },
                 ].map((m, i) => {
                   const pct = m.target > 0 ? Math.min(100, (m.consumed / m.target) * 100) : 0;
                   return (
@@ -703,8 +908,97 @@ export default function Dashboard() {
                 })}
               </div>
               <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest leading-loose mt-2">
-                Meals logged: <span className="text-emerald-500 px-2 bg-emerald-50 rounded-md">{dailyProgress?.logCount ?? 0}</span>
+                Meals logged: <span className="text-emerald-500 px-2 bg-emerald-50 rounded-md">{dailyProgress?.mealCount ?? 0}</span>
               </p>
+            </div>
+
+            {/* Adaptive Profile */}
+            <div className="bg-white rounded-[2.5rem] p-8 border border-slate-100 shadow-sm space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-black uppercase tracking-widest text-slate-400 flex items-center gap-2">
+                  <Brain className="w-4 h-4 text-violet-500" /> Adaptive Profile
+                </h3>
+                <button onClick={handleComputeProfile} disabled={computingProfile}
+                  className="p-1.5 text-slate-400 hover:text-violet-600 cursor-pointer disabled:opacity-50 transition-all" title="Recompute">
+                  <RefreshCw className={`w-4 h-4 ${computingProfile ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
+
+              {adaptiveProfile ? (
+                <div className="space-y-3">
+                  {/* Quadrant */}
+                  <div className="flex items-center justify-between p-3 bg-violet-50 rounded-xl">
+                    <span className="text-xs font-bold text-violet-500">State</span>
+                    <span className="text-xs font-black text-violet-700 capitalize">{adaptiveProfile.quadrant.replace('_', ' ')}</span>
+                  </div>
+
+                  {/* Key metrics grid */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="p-3 bg-slate-50 rounded-xl text-center">
+                      <p className="text-lg font-black text-slate-900">{Math.round(adaptiveProfile.pressureScore)}</p>
+                      <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Pressure</p>
+                    </div>
+                    <div className="p-3 bg-slate-50 rounded-xl text-center">
+                      <p className="text-lg font-black text-slate-900">{adaptiveProfile.complexityTarget}/10</p>
+                      <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Complexity</p>
+                    </div>
+                  </div>
+
+                  {/* Strictness + Plan Mode */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="p-3 bg-slate-50 rounded-xl">
+                      <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Strictness</p>
+                      <p className={`text-xs font-black capitalize ${
+                        adaptiveProfile.strictnessLevel === 'strict' ? 'text-red-600' :
+                        adaptiveProfile.strictnessLevel === 'lenient' ? 'text-emerald-600' : 'text-amber-600'
+                      }`}>{adaptiveProfile.strictnessLevel}</p>
+                    </div>
+                    <div className="p-3 bg-slate-50 rounded-xl">
+                      <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Plan Mode</p>
+                      <p className="text-xs font-black text-slate-700 capitalize">{adaptiveProfile.planMode}</p>
+                    </div>
+                  </div>
+
+                  {/* Flags */}
+                  <div className="flex gap-2">
+                    {adaptiveProfile.simplifyFlag && (
+                      <span className="px-2 py-1 bg-amber-50 text-amber-600 rounded-lg text-[10px] font-black uppercase">Simplify</span>
+                    )}
+                    {adaptiveProfile.recalibrateFlag && (
+                      <span className="px-2 py-1 bg-sky-50 text-sky-600 rounded-lg text-[10px] font-black uppercase">Recalibrate</span>
+                    )}
+                    {!adaptiveProfile.simplifyFlag && !adaptiveProfile.recalibrateFlag && (
+                      <span className="px-2 py-1 bg-emerald-50 text-emerald-600 rounded-lg text-[10px] font-black uppercase">No flags</span>
+                    )}
+                  </div>
+
+                  {/* Scores */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="p-2 bg-slate-50 rounded-lg text-center">
+                      <p className="text-sm font-black text-slate-800">{(adaptiveProfile.adherenceScore * 100).toFixed(0)}%</p>
+                      <p className="text-[9px] font-bold text-slate-400 uppercase">Weekly Adherence</p>
+                    </div>
+                    <div className="p-2 bg-slate-50 rounded-lg text-center">
+                      <p className="text-sm font-black text-slate-800">{(adaptiveProfile.outcomeScore * 100).toFixed(0)}%</p>
+                      <p className="text-[9px] font-bold text-slate-400 uppercase">Weekly Outcome</p>
+                    </div>
+                  </div>
+
+                  <p className="text-[9px] text-slate-400 font-bold">
+                    Week {adaptiveProfile.weekNumber} &middot; {adaptiveProfile.weekStreak}wk streak &middot; {new Date(adaptiveProfile.computedAt).toLocaleDateString()}
+                  </p>
+                </div>
+              ) : (
+                <div className="text-center py-4 space-y-3">
+                  <p className="text-xs text-slate-400 font-bold">No adaptive profile yet</p>
+                  <button onClick={handleComputeProfile} disabled={computingProfile}
+                    className="px-4 py-2 bg-violet-600 text-white rounded-xl font-bold text-xs hover:bg-violet-700 cursor-pointer disabled:opacity-50 flex items-center gap-2 mx-auto"
+                  >
+                    {computingProfile ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Brain className="w-3 h-3" />}
+                    {computingProfile ? 'Computing...' : 'Compute Now'}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>

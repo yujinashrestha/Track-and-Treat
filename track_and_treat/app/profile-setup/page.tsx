@@ -57,7 +57,7 @@ export default function ProfileSetup() {
         activityLevel: '',
         dietaryGoal: 'maintain',
         dietaryLifestyle: 'none',
-        mealsPerDay: '3',
+        mealsPerDay: '',
         budgetPerDay: '',
         allergies: [],
         restrictions: [],
@@ -120,7 +120,7 @@ export default function ProfileSetup() {
                     activityLevel: formData.activityLevel as ProfileData['activityLevel'] || undefined,
                     dietaryGoal: formData.dietaryGoal as ProfileData['dietaryGoal'] || undefined,
                     dietaryLifestyle: formData.dietaryLifestyle as ProfileData['dietaryLifestyle'] || undefined,
-                    mealsPerDay: parseInt(formData.mealsPerDay) || 3,
+                    mealsPerDay: formData.mealsPerDay ? parseInt(formData.mealsPerDay) : undefined,
                     budgetPerDay: formData.budgetPerDay ? parseFloat(formData.budgetPerDay) : undefined,
                     allergies: formData.allergies.length ? formData.allergies : undefined,
                     restrictions: formData.restrictions.length ? formData.restrictions : undefined,
@@ -503,7 +503,8 @@ function GoalsAndLifestyle({ dietaryGoal, dietaryLifestyle, mealsPerDay, budgetP
                         onChange={e => updateFields({ mealsPerDay: e.target.value })}
                         className="w-full px-6 py-4 bg-slate-50 border-2 border-transparent rounded-2xl focus:bg-white focus:border-orange-500 outline-hidden transition-all font-medium appearance-none"
                     >
-                        {[1, 2, 3, 4, 5, 6, 7, 8].map(n => (
+                        <option value="">Auto (recommended)</option>
+                        {[2, 3, 4, 5, 6, 7, 8].map(n => (
                             <option key={n} value={n}>{n}</option>
                         ))}
                     </select>
@@ -636,6 +637,9 @@ function TagInput({ label, icon, placeholder, tags, color, onChange }: {
 // ─── Step 5: Results Summary ───
 
 function ResultsSummary({ stats, dietaryGoal }: { stats: UserStats | null; dietaryGoal: string }) {
+    const [customCalories, setCustomCalories] = useState<string>('');
+    const [editing, setEditing] = useState(false);
+
     if (!stats) {
         return (
             <div className="flex items-center justify-center min-h-[300px] text-slate-400">
@@ -645,11 +649,42 @@ function ResultsSummary({ stats, dietaryGoal }: { stats: UserStats | null; dieta
     }
 
     const tdee = stats.tdee ?? 0;
-    const targetCalories = stats.targetCalories ?? tdee;
+    const recommendedCalories = stats.targetCalories ?? tdee;
     const bmr = stats.bmr ?? 0;
+    const activeCalories = customCalories ? parseInt(customCalories) || recommendedCalories : recommendedCalories;
 
-    // Derive macro split from target calories and goal (same logic as backend-agnostic display)
-    const macros = computeMacroSplit(targetCalories, dietaryGoal);
+    // Warning logic based on goal
+    let warning = '';
+    let warningColor = '';
+    if (customCalories && activeCalories !== recommendedCalories) {
+        if (dietaryGoal === 'lose') {
+            if (activeCalories > recommendedCalories) {
+                warning = 'Higher than recommended — may slow weight loss progress';
+                warningColor = 'text-amber-600 bg-amber-50 border-amber-200';
+            } else if (activeCalories < bmr) {
+                warning = 'Below BMR — not safe for sustained energy and metabolism';
+                warningColor = 'text-red-600 bg-red-50 border-red-200';
+            }
+        } else if (dietaryGoal === 'gain') {
+            if (activeCalories < recommendedCalories) {
+                warning = 'Lower than recommended — may not support muscle gain';
+                warningColor = 'text-amber-600 bg-amber-50 border-amber-200';
+            } else if (activeCalories > recommendedCalories + 500) {
+                warning = 'Excess surplus — risk of unnecessary fat gain';
+                warningColor = 'text-amber-600 bg-amber-50 border-amber-200';
+            }
+        } else {
+            if (activeCalories < recommendedCalories - 200) {
+                warning = 'Below maintenance — will result in gradual weight loss';
+                warningColor = 'text-amber-600 bg-amber-50 border-amber-200';
+            } else if (activeCalories > recommendedCalories + 200) {
+                warning = 'Above maintenance — will result in gradual weight gain';
+                warningColor = 'text-amber-600 bg-amber-50 border-amber-200';
+            }
+        }
+    }
+
+    const macros = computeMacroSplit(activeCalories, dietaryGoal);
 
     return (
         <div className="space-y-8">
@@ -673,12 +708,46 @@ function ResultsSummary({ stats, dietaryGoal }: { stats: UserStats | null; dieta
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* Target Calories */}
-                <div className="bg-linear-to-br from-emerald-500 to-emerald-600 rounded-[2rem] p-8 text-white shadow-xl shadow-emerald-900/10">
-                    <p className="text-[10px] font-black uppercase tracking-widest opacity-70 mb-2">Daily Calorie Target</p>
-                    <div className="flex items-baseline gap-2">
-                        <span className="text-6xl font-black">{targetCalories}</span>
-                        <span className="text-xl font-bold opacity-60">kcal</span>
+                {/* Target Calories — editable */}
+                <div className="space-y-2">
+                    {warning && (
+                        <div className={`px-4 py-2 rounded-xl border text-xs font-bold ${warningColor}`}>
+                            {warning}
+                        </div>
+                    )}
+                    <div className="bg-linear-to-br from-emerald-500 to-emerald-600 rounded-[2rem] p-8 text-white shadow-xl shadow-emerald-900/10">
+                        <div className="flex items-center justify-between mb-2">
+                            <p className="text-[10px] font-black uppercase tracking-widest opacity-70">Daily Calorie Target</p>
+                            <button
+                                type="button"
+                                onClick={() => { setEditing(!editing); if (editing) setCustomCalories(''); }}
+                                className="text-[10px] font-black uppercase tracking-widest bg-white/20 px-3 py-1 rounded-lg hover:bg-white/30 transition-all cursor-pointer"
+                            >
+                                {editing ? 'Reset' : 'Edit'}
+                            </button>
+                        </div>
+                        {editing ? (
+                            <div className="flex items-baseline gap-2">
+                                <input
+                                    type="number"
+                                    value={customCalories}
+                                    onChange={e => setCustomCalories(e.target.value)}
+                                    placeholder={String(recommendedCalories)}
+                                    min={800}
+                                    max={10000}
+                                    className="w-full text-5xl font-black bg-white/10 border-2 border-white/30 rounded-xl px-4 py-2 text-white placeholder-white/40 outline-none focus:border-white/60 transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                />
+                                <span className="text-xl font-bold opacity-60 shrink-0">kcal</span>
+                            </div>
+                        ) : (
+                            <div className="flex items-baseline gap-2">
+                                <span className="text-6xl font-black">{activeCalories}</span>
+                                <span className="text-xl font-bold opacity-60">kcal</span>
+                            </div>
+                        )}
+                        {customCalories && activeCalories !== recommendedCalories && (
+                            <p className="text-[10px] font-bold opacity-60 mt-2">Recommended: {recommendedCalories} kcal</p>
+                        )}
                     </div>
                 </div>
 

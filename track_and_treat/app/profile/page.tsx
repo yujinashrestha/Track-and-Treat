@@ -77,7 +77,7 @@ export default function ProfilePage() {
         activityLevel: profile.activityLevel || '',
         dietaryGoal: profile.dietaryGoal || 'maintain',
         dietaryLifestyle: profile.dietaryLifestyle || 'none',
-        mealsPerDay: String(profile.mealsPerDay || 3),
+        mealsPerDay: profile.mealsPerDayAuto ? '' : String(profile.mealsPerDay || 3),
         budgetPerDay: profile.budgetPerDay ? String(profile.budgetPerDay) : '',
         dailyWaterTarget: String(profile.dailyWaterTarget || 2500),
         allergies: profile.allergies || [],
@@ -121,7 +121,7 @@ export default function ProfilePage() {
       if (form.activityLevel) payload.activityLevel = form.activityLevel as ProfileData['activityLevel'];
       if (form.dietaryGoal) payload.dietaryGoal = form.dietaryGoal as ProfileData['dietaryGoal'];
       if (form.dietaryLifestyle) payload.dietaryLifestyle = form.dietaryLifestyle as ProfileData['dietaryLifestyle'];
-      payload.mealsPerDay = parseInt(form.mealsPerDay) || 3;
+      if (form.mealsPerDay) payload.mealsPerDay = parseInt(form.mealsPerDay);
       if (form.budgetPerDay) payload.budgetPerDay = parseFloat(form.budgetPerDay);
       if (form.dailyWaterTarget) payload.dailyWaterTarget = parseFloat(form.dailyWaterTarget);
       if (form.allergies.length) payload.allergies = form.allergies;
@@ -191,16 +191,9 @@ export default function ProfilePage() {
           </div>
         </Section>
 
-        {/* Computed Stats (read-only) */}
+        {/* Computed Stats */}
         {stats && stats.bmr && (
-          <Section icon={<Activity className="w-5 h-5 text-orange-600" />} title="Computed Targets">
-            <div className="grid grid-cols-3 gap-4">
-              <StatCard label="BMR" value={`${stats.bmr}`} unit="kcal" />
-              <StatCard label="TDEE" value={`${stats.tdee}`} unit="kcal" />
-              <StatCard label="Target" value={`${stats.targetCalories ? Math.round(stats.targetCalories) : '-'}`} unit="kcal" />
-            </div>
-            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-3">Auto-calculated from your profile. Changes update on save.</p>
-          </Section>
+          <ComputedTargets stats={stats} dietaryGoal={form.dietaryGoal} />
         )}
 
         {/* Basic Info */}
@@ -280,8 +273,14 @@ export default function ProfilePage() {
             <div>
               <Label>Meals / Day</Label>
               <select value={form.mealsPerDay} onChange={e => update({ mealsPerDay: e.target.value })} className="input-field appearance-none">
-                {[1,2,3,4,5,6,7,8].map(n => <option key={n} value={n}>{n}</option>)}
+                <option value="">Auto</option>
+                {[2,3,4,5,6,7,8].map(n => <option key={n} value={n}>{n}</option>)}
               </select>
+              {(form.mealsPerDay === '' || stats?.mealsPerDayAuto) && (
+                <p className="text-[10px] text-amber-600 font-bold mt-1">
+                  {form.mealsPerDay === '' ? 'Will be computed from your calorie target' : `System-suggested: ${stats?.mealsPerDay} meals (${Math.round((stats?.targetCalories ?? 0) / (stats?.mealsPerDay ?? 3))} kcal each)`}
+                </p>
+              )}
             </div>
             <div>
               <Label>Daily Budget{form.region && getCurrencySymbol(form.region) ? ` (${getCurrencySymbol(form.region)})` : ''}</Label>
@@ -319,6 +318,91 @@ export default function ProfilePage() {
 
       <div className="sm:hidden pb-20"><AppNav /></div>
     </div>
+  );
+}
+
+// ─── Computed Targets (editable) ───
+
+function ComputedTargets({ stats, dietaryGoal }: { stats: UserStats; dietaryGoal: string }) {
+  const recommended = stats.targetCalories ? Math.round(stats.targetCalories) : 0;
+  const bmr = stats.bmr ?? 0;
+  const [customCalories, setCustomCalories] = useState('');
+  const [editing, setEditing] = useState(false);
+
+  const active = customCalories ? parseInt(customCalories) || recommended : recommended;
+
+  let warning = '';
+  let warningColor = '';
+  if (customCalories && active !== recommended) {
+    if (dietaryGoal === 'lose') {
+      if (active > recommended) {
+        warning = 'Higher than recommended — may slow weight loss progress';
+        warningColor = 'text-amber-600 bg-amber-50 border-amber-200';
+      } else if (active < bmr) {
+        warning = 'Below BMR — not safe for sustained energy and metabolism';
+        warningColor = 'text-red-600 bg-red-50 border-red-200';
+      }
+    } else if (dietaryGoal === 'gain') {
+      if (active < recommended) {
+        warning = 'Lower than recommended — may not support muscle gain';
+        warningColor = 'text-amber-600 bg-amber-50 border-amber-200';
+      } else if (active > recommended + 500) {
+        warning = 'Excess surplus — risk of unnecessary fat gain';
+        warningColor = 'text-amber-600 bg-amber-50 border-amber-200';
+      }
+    } else {
+      if (active < recommended - 200) {
+        warning = 'Below maintenance — will result in gradual weight loss';
+        warningColor = 'text-amber-600 bg-amber-50 border-amber-200';
+      } else if (active > recommended + 200) {
+        warning = 'Above maintenance — will result in gradual weight gain';
+        warningColor = 'text-amber-600 bg-amber-50 border-amber-200';
+      }
+    }
+  }
+
+  return (
+    <Section icon={<Activity className="w-5 h-5 text-orange-600" />} title="Computed Targets">
+      {warning && (
+        <div className={`px-4 py-2 rounded-xl border text-xs font-bold mb-4 ${warningColor}`}>
+          {warning}
+        </div>
+      )}
+      <div className="grid grid-cols-3 gap-4">
+        <StatCard label="BMR" value={`${bmr}`} unit="kcal" />
+        <StatCard label="TDEE" value={`${stats.tdee}`} unit="kcal" />
+        {editing ? (
+          <div className="bg-emerald-50 border-2 border-emerald-300 rounded-xl p-4 text-center">
+            <input
+              type="number"
+              value={customCalories}
+              onChange={e => setCustomCalories(e.target.value)}
+              placeholder={String(recommended)}
+              min={800}
+              max={10000}
+              className="w-full text-2xl font-black text-emerald-700 bg-transparent text-center outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+            />
+            <p className="text-[10px] font-black text-emerald-500 uppercase tracking-widest">Target</p>
+          </div>
+        ) : (
+          <StatCard label="Target" value={`${active}`} unit="kcal" />
+        )}
+      </div>
+      <div className="flex items-center justify-between mt-3">
+        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
+          {customCalories && active !== recommended
+            ? `Recommended: ${recommended} kcal`
+            : 'Auto-calculated from your profile. Changes update on save.'}
+        </p>
+        <button
+          type="button"
+          onClick={() => { setEditing(!editing); if (editing) setCustomCalories(''); }}
+          className="text-[10px] font-black uppercase tracking-widest text-emerald-600 hover:text-emerald-700 cursor-pointer"
+        >
+          {editing ? 'Reset' : 'Edit Target'}
+        </button>
+      </div>
+    </Section>
   );
 }
 

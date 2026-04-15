@@ -78,7 +78,38 @@ export function calculateMacros(calories: number, goal: string) {
 }
 
 /**
- * ALGORITHM 4: Adaptive Strictness Mode (Behavior-Aware Logic)
+ * ALGORITHM 4a: Weighted Adherence Score
+ * Factors in calories (50%) + protein (20%) + carbs (15%) + fat (15%).
+ * Each component = 1 - |deviation from target ratio|, clamped to [0, 1].
+ */
+export interface MacroTotals {
+  protein: number;
+  carbs: number;
+  fat: number;
+}
+
+export function calculateAdherence(
+  consumedCals: number,
+  targetCals: number,
+  consumedMacros: MacroTotals,
+  targetMacros: MacroTotals,
+): number {
+  if (targetCals <= 0) return 0;
+
+  const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+  const ratio = (consumed: number, target: number) =>
+    target > 0 ? clamp01(1 - Math.abs(consumed - target) / target) : 1;
+
+  const calScore = ratio(consumedCals, targetCals);
+  const protScore = ratio(consumedMacros.protein, targetMacros.protein);
+  const carbScore = ratio(consumedMacros.carbs, targetMacros.carbs);
+  const fatScore = ratio(consumedMacros.fat, targetMacros.fat);
+
+  return calScore * 0.5 + protScore * 0.2 + carbScore * 0.15 + fatScore * 0.15;
+}
+
+/**
+ * ALGORITHM 4b: Adaptive Strictness Mode (Behavior-Aware Logic)
    Deterministic state machine.
  */
 export type StrictnessLevel = 'LENIENT' | 'MODERATE' | 'STRICT';

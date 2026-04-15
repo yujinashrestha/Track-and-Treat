@@ -164,6 +164,7 @@ export interface Profile extends ProfileData {
   initialWeight: number | null;
   targetCalories: number | null;
   dailyWaterTarget: number;
+  mealsPerDayAuto: boolean;
   onboardingCompleted: boolean;
 }
 
@@ -174,6 +175,8 @@ export interface UserStats {
   currentWeight: number | null;
   initialWeight: number | null;
   dietaryGoal: string | null;
+  mealsPerDay: number;
+  mealsPerDayAuto: boolean;
   onboardingCompleted: boolean;
 }
 
@@ -230,6 +233,8 @@ export interface MealLog {
   protein: number;
   carbs: number;
   fat: number;
+  groupId: string | null;
+  groupName: string | null;
   loggedAt: string;
   createdAt: string;
 }
@@ -246,6 +251,10 @@ export interface DailySummary {
   logCount: number;
 }
 
+export type Quadrant = 'ideal' | 'plan_wrong' | 'self_directed' | 'struggling';
+export type StrictnessLevel = 'lenient' | 'moderate' | 'strict';
+export type PlanMode = 'prescriptive' | 'flexible' | 'suggestive';
+
 export interface DailyProgress {
   date: string;
   target: number;
@@ -253,8 +262,36 @@ export interface DailyProgress {
   remaining: number;
   percentage: number;
   macros: { protein: number; carbs: number; fat: number };
+  macroTargets: { protein: number; carbs: number; fat: number };
+  outcomeScore: number;
+  planAdherence: number | null;
+  strictness: StrictnessLevel;
+  quadrant: Quadrant | null;
+  planMode: PlanMode | null;
+  pressureScore: number | null;
+  plannedMeals: MealPlanItem[] | null;
   meals: Record<string, MealLog[]>;
   logCount: number;
+  mealCount: number;
+}
+
+export interface AdaptiveProfileData {
+  quadrant: Quadrant;
+  strictnessLevel: StrictnessLevel;
+  planMode: PlanMode;
+  pressureScore: number;
+  complexityTarget: number;
+  simplifyFlag: boolean;
+  recalibrateFlag: boolean;
+  adherenceScore: number;
+  outcomeScore: number;
+  weekStreak: number;
+  weekNumber: number;
+  skippedFoods: number[];
+  preferredFoods: number[];
+  slotAdherence: Record<string, number>;
+  weekStartDate: string;
+  computedAt: string;
 }
 
 export function parseText(data: { text: string; mealType: MealType; loggedAt?: string }) {
@@ -320,6 +357,8 @@ export interface MealPlanItem {
   id: number;
   day: number;
   mealType: string;
+  recipeName: string | null;
+  prepNotes: string | null;
   foodItemId: number;
   foodItem: FoodItem;
   quantity: number;
@@ -475,6 +514,21 @@ export function getWeightHistory(startDate?: string, endDate?: string) {
 
 export function deleteWeightLog(id: number) {
   return request<void>(`weight-logs/${id}`, { method: 'DELETE' });
+}
+
+// --- Adaptive Profile API ---
+
+export function computeAdaptiveProfileApi(weekStartDate?: string) {
+  const query = weekStartDate ? `?weekStartDate=${weekStartDate}` : '';
+  return request<AdaptiveProfileData>(`adaptive/compute${query}`, { method: 'POST' });
+}
+
+export function getCurrentAdaptiveProfile() {
+  return request<AdaptiveProfileData>('adaptive/current', { method: 'GET' });
+}
+
+export function getAdaptiveHistory() {
+  return request<AdaptiveProfileData[]>('adaptive/history', { method: 'GET' });
 }
 
 export { clearTokens };
