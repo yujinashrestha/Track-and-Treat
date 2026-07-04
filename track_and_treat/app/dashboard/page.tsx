@@ -17,12 +17,12 @@ import { useAuth } from '@/lib/auth-context';
 import { AppNav } from '@/components/app-nav';
 import {
   getStats, getDailyProgress, parseText, deleteMealLog,
-  searchFood, createMealLog,
+  searchFood, createMealLog, searchRecipes, logRecipe,
   createWaterLog, getWaterSummary, deleteWaterLog,
   getCurrentAdaptiveProfile, computeAdaptiveProfileApi,
   ApiError,
   type MealLog, type MealType, type DailyProgress, type FoodItem, type WaterSummary,
-  type StrictnessLevel, type Quadrant, type AdaptiveProfileData,
+  type StrictnessLevel, type Quadrant, type AdaptiveProfileData, type Recipe,
 } from '@/lib/api';
 
 const MEAL_TYPE_LABELS: Record<MealType, string> = {
@@ -74,7 +74,7 @@ export default function Dashboard() {
 
   // Form State
   const [showMealForm, setShowMealForm] = useState(false);
-  const [entryMode, setEntryMode] = useState<'text' | 'search'>('text');
+  const [entryMode, setEntryMode] = useState<'text' | 'search' | 'recipe'>('text');
   const [mealText, setMealText] = useState('');
   const [mealType, setMealType] = useState<MealType>('lunch');
   const [parseResult, setParseResult] = useState<any>(null);
@@ -89,6 +89,13 @@ export default function Dashboard() {
   const [selectedFood, setSelectedFood] = useState<FoodItem | null>(null);
   const [quantity, setQuantity] = useState(1);
   const [manualLogging, setManualLogging] = useState(false);
+
+  // Catalog recipe logging
+  const [recipeQuery, setRecipeQuery] = useState('');
+  const [recipeResults, setRecipeResults] = useState<Recipe[]>([]);
+  const [recipeSearching, setRecipeSearching] = useState(false);
+  const [selectedRecipe, setSelectedRecipe] = useState<Recipe | null>(null);
+  const [recipeLogging, setRecipeLogging] = useState(false);
 
   const loadDashboardData = useCallback(async () => {
     try {
@@ -222,7 +229,7 @@ export default function Dashboard() {
       } else {
         groups.push({
           key: `single-${log.id}`,
-          name: log.foodItem?.name || 'Unknown',
+          name: log.foodItem?.name || log.recipe?.name || log.groupName || 'Unknown',
           mealType: log.mealType as MealType,
           items: [log],
           totals: { calories: Number(log.calories), protein: Number(log.protein), carbs: Number(log.carbs), fat: Number(log.fat) },
@@ -312,6 +319,40 @@ export default function Dashboard() {
     }
   };
 
+  const handleRecipeSearch = async () => {
+    setRecipeSearching(true);
+    setFormError('');
+    try {
+      const results = await searchRecipes(recipeQuery.trim() || undefined, mealType);
+      setRecipeResults(results);
+      if (results.length === 0) setFormError('No catalog recipes found. Try a different search.');
+    } catch {
+      setFormError('Recipe search failed. Please try again.');
+    } finally {
+      setRecipeSearching(false);
+    }
+  };
+
+  const handleLogRecipe = async () => {
+    if (!selectedRecipe) return;
+    setRecipeLogging(true);
+    setFormError('');
+    try {
+      await logRecipe({ recipeId: selectedRecipe.id, quantity, mealType });
+      setLogged(true);
+      setTimeout(() => {
+        setShowMealForm(false);
+        resetFormState();
+        loadDashboardData();
+      }, 800);
+    } catch (err) {
+      if (err instanceof ApiError) setFormError(err.message);
+      else setFormError('Failed to log recipe.');
+    } finally {
+      setRecipeLogging(false);
+    }
+  };
+
   const handleComputeProfile = async () => {
     setComputingProfile(true);
     try {
@@ -333,6 +374,9 @@ export default function Dashboard() {
     setSearchResults([]);
     setSelectedFood(null);
     setQuantity(1);
+    setRecipeQuery('');
+    setRecipeResults([]);
+    setSelectedRecipe(null);
     setEntryMode('text');
   };
 
@@ -636,6 +680,9 @@ export default function Dashboard() {
                       <button onClick={() => setEntryMode('search')} className={`flex-1 py-2.5 rounded-lg font-bold text-sm transition-all cursor-pointer flex items-center justify-center gap-2 ${entryMode === 'search' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
                         <Search className="w-4 h-4" /> Search Food
                       </button>
+                      <button onClick={() => { setEntryMode('recipe'); if (recipeResults.length === 0) handleRecipeSearch(); }} className={`flex-1 py-2.5 rounded-lg font-bold text-sm transition-all cursor-pointer flex items-center justify-center gap-2 ${entryMode === 'recipe' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                        <Utensils className="w-4 h-4" /> Recipes
+                      </button>
                     </div>
 
                     {formError && (
@@ -780,6 +827,82 @@ export default function Dashboard() {
                         )}
                       </div>
                     )}
+
+                    {/* ── RECIPE MODE ── */}
+                    {entryMode === 'recipe' && (
+                      <div className="space-y-4">
+                        <div className="flex gap-2">
+                          <input
+                            value={recipeQuery}
+                            onChange={(e) => { setRecipeQuery(e.target.value); setFormError(''); }}
+                            placeholder="Search catalog recipes..."
+                            className="flex-1 px-6 py-4 bg-slate-50 border-2 border-transparent rounded-xl focus:bg-white focus:border-emerald-500 outline-none transition-all font-bold text-slate-900"
+                            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleRecipeSearch(); } }}
+                          />
+                          <button onClick={handleRecipeSearch} disabled={recipeSearching}
+                            className="px-5 bg-emerald-600 text-white rounded-xl font-black hover:bg-emerald-700 transition-all cursor-pointer disabled:opacity-50 flex items-center gap-2"
+                          >
+                            {recipeSearching ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Search className="w-4 h-4" />}
+                          </button>
+                        </div>
+
+                        {selectedRecipe && (
+                          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-emerald-50 border border-emerald-200 rounded-2xl p-5 space-y-4">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <p className="font-black text-slate-900">{selectedRecipe.name}</p>
+                                <p className="text-xs text-slate-500 font-bold">{selectedRecipe.mealTypes.join(', ')} &middot; {Math.round(Number(selectedRecipe.calories))} kcal/serving</p>
+                              </div>
+                              <button onClick={() => setSelectedRecipe(null)} className="text-slate-400 hover:text-slate-900 cursor-pointer"><X className="w-4 h-4" /></button>
+                            </div>
+                            <div className="flex items-center gap-4">
+                              <span className="text-xs font-black uppercase tracking-widest text-slate-400">Servings</span>
+                              <div className="flex items-center gap-2 bg-white rounded-xl p-1">
+                                <button onClick={() => setQuantity(Math.max(0.25, quantity - 0.25))} className="p-2 hover:bg-slate-50 rounded-lg cursor-pointer"><Minus className="w-4 h-4 text-slate-600" /></button>
+                                <span className="w-12 text-center font-black text-slate-900">{quantity}</span>
+                                <button onClick={() => setQuantity(quantity + 0.25)} className="p-2 hover:bg-slate-50 rounded-lg cursor-pointer"><Plus className="w-4 h-4 text-slate-600" /></button>
+                              </div>
+                              <div className="flex-1 text-right text-sm font-bold text-slate-500">= {Math.round(Number(selectedRecipe.calories) * quantity)} kcal</div>
+                            </div>
+                            <div className="grid grid-cols-4 gap-2 text-center">
+                              {[
+                                { l: 'Cal', v: Math.round(Number(selectedRecipe.calories) * quantity), c: 'text-orange-600' },
+                                { l: 'Prot', v: Math.round(Number(selectedRecipe.protein) * quantity), c: 'text-emerald-600' },
+                                { l: 'Carbs', v: Math.round(Number(selectedRecipe.carbs) * quantity), c: 'text-amber-600' },
+                                { l: 'Fat', v: Math.round(Number(selectedRecipe.fat) * quantity), c: 'text-slate-600' },
+                              ].map((s, i) => (
+                                <div key={i}><p className={`font-black ${s.c}`}>{s.v}</p><p className="text-[9px] font-bold text-slate-400 uppercase">{s.l}</p></div>
+                              ))}
+                            </div>
+                            <button onClick={handleLogRecipe} disabled={recipeLogging}
+                              className={`w-full py-4 bg-emerald-600 text-white rounded-xl font-black flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 ${logged ? 'bg-emerald-500' : ''}`}
+                            >
+                              {logged ? <CheckCircle2 className="w-5 h-5" /> : recipeLogging ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <PlusCircle className="w-5 h-5" />}
+                              {logged ? 'Logged!' : recipeLogging ? 'Logging...' : 'Log This Recipe'}
+                            </button>
+                          </motion.div>
+                        )}
+
+                        {!selectedRecipe && recipeResults.length > 0 && (
+                          <div className="max-h-[300px] overflow-y-auto space-y-2 pr-1">
+                            {recipeResults.map((r) => (
+                              <button key={r.id} onClick={() => { setSelectedRecipe(r); setQuantity(1); }}
+                                className="w-full flex items-center justify-between p-4 bg-slate-50 rounded-xl hover:bg-slate-100 transition-all cursor-pointer text-left"
+                              >
+                                <div>
+                                  <p className="font-bold text-slate-900 text-sm">{r.name}</p>
+                                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{r.mealTypes.join(', ')} &middot; {r.prepMinutes}min</p>
+                                </div>
+                                <div className="text-right shrink-0 ml-4">
+                                  <p className="font-black text-slate-900 text-sm">{Math.round(Number(r.calories))} <span className="text-[10px]">kcal</span></p>
+                                  <p className="text-[10px] text-slate-400">{Math.round(Number(r.protein))}p / {Math.round(Number(r.carbs))}c / {Math.round(Number(r.fat))}f</p>
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -842,7 +965,7 @@ export default function Dashboard() {
                                   <div>
                                     <p className="font-bold text-slate-800 text-sm">{log.foodItem?.name || 'Unknown'}</p>
                                     <p className="text-[10px] text-slate-400 font-bold">
-                                      {Math.round(Number(log.quantity) * (parseFloat(log.foodItem?.servingSize) || 100))}{log.foodItem?.servingUnit || 'g'}
+                                      {Math.round(Number(log.quantity) * (parseFloat(log.foodItem?.servingSize ?? '') || 100))}{log.foodItem?.servingUnit || 'g'}
                                     </p>
                                   </div>
                                   <div className="flex items-center gap-3">

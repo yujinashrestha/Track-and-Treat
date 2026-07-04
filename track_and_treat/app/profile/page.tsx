@@ -25,8 +25,6 @@ const LIFESTYLE_LABELS: Record<string, string> = {
   vegetarian: 'Vegetarian',
   vegan: 'Vegan',
   pescatarian: 'Pescatarian',
-  keto: 'Keto',
-  paleo: 'Paleo',
 };
 
 const GOAL_LABELS: Record<string, string> = {

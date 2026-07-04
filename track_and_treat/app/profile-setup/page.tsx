@@ -419,8 +419,6 @@ function GoalsAndLifestyle({ dietaryGoal, dietaryLifestyle, mealsPerDay, budgetP
         { id: 'vegetarian', label: 'Vegetarian' },
         { id: 'vegan', label: 'Vegan' },
         { id: 'pescatarian', label: 'Pescatarian' },
-        { id: 'keto', label: 'Keto' },
-        { id: 'paleo', label: 'Paleo' },
     ];
 
     return (

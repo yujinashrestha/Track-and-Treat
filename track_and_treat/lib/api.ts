@@ -149,7 +149,7 @@ export interface ProfileData {
   currentWeight?: number;
   activityLevel?: 'sedentary' | 'lightly_active' | 'moderately_active' | 'very_active' | 'extra_active';
   dietaryGoal?: 'lose' | 'maintain' | 'gain';
-  dietaryLifestyle?: 'none' | 'vegetarian' | 'vegan' | 'pescatarian' | 'keto' | 'paleo';
+  dietaryLifestyle?: 'none' | 'vegetarian' | 'vegan' | 'pescatarian';
   allergies?: string[];
   restrictions?: string[];
   dislikes?: string[];
@@ -217,6 +217,34 @@ export function searchFood(query: string, limit = 20) {
   });
 }
 
+// --- Recipe (catalog) API ---
+
+export interface Recipe {
+  id: number;
+  name: string;
+  mealTypes: string[];
+  complexity: number;
+  prepMinutes: number;
+  servingGrams: number | null;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  fiber: number;
+}
+
+export function searchRecipes(query?: string, mealType?: string, limit = 20) {
+  const params = new URLSearchParams();
+  if (query) params.set('query', query);
+  if (mealType) params.set('mealType', mealType);
+  params.set('limit', String(limit));
+  return request<Recipe[]>(`recipes?${params.toString()}`, { method: 'GET' });
+}
+
+export function getRecipe(id: number) {
+  return request<Recipe>(`recipes/${id}`, { method: 'GET' });
+}
+
 // --- Meal Log API ---
 
 export type MealType = 'breakfast' | 'lunch' | 'dinner' | 'snack';
@@ -224,8 +252,10 @@ export type MealType = 'breakfast' | 'lunch' | 'dinner' | 'snack';
 export interface MealLog {
   id: number;
   userId: number;
-  foodItemId: number;
-  foodItem: FoodItem;
+  foodItemId: number | null;
+  foodItem: FoodItem | null;
+  recipeId: number | null;
+  recipe?: Recipe | null;
   quantity: number;
   mealType: MealType;
   source: 'manual' | 'ai_parsed' | 'plan';
@@ -308,6 +338,13 @@ export function createMealLog(data: { foodItemId: number; quantity: number; meal
   });
 }
 
+export function logRecipe(data: { recipeId: number; quantity?: number; mealType: MealType; loggedAt?: string }) {
+  return request<MealLog>('meal-logs/recipe', {
+    method: 'POST',
+    body: data,
+  });
+}
+
 export function getMealLogs(date: string, endDate?: string) {
   let url = `meal-logs?date=${date}`;
   if (endDate) url += `&endDate=${endDate}`;
@@ -361,7 +398,9 @@ export interface MealPlanItem {
   prepNotes: string | null;
   foodItemId: number;
   foodItem: FoodItem;
+  recipeId: number | null;
   quantity: number;
+  grams: number | null;
   notes: string | null;
   calories: number;
   protein: number;

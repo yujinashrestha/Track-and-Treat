@@ -399,7 +399,9 @@ export default function MealPlansPage() {
                                         <div>
                                           <p className="font-bold text-slate-800 text-sm">{item.foodItem?.name || 'Unknown'}</p>
                                           <p className="text-[10px] text-slate-400 font-bold">
-                                            {Math.round(Number(item.quantity) * (parseFloat(item.foodItem?.servingSize) || 100))}{item.foodItem?.servingUnit || 'g'}
+                                            {item.grams != null
+                                              ? Math.round(Number(item.grams))
+                                              : Math.round(Number(item.quantity) * (parseFloat(item.foodItem?.servingSize) || 100))}{item.foodItem?.servingUnit || 'g'}
                                           </p>
                                         </div>
                                         <div className="flex items-center gap-3">
