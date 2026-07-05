@@ -232,7 +232,7 @@ export default function MealPlansPage() {
             </button>
             <div>
               <h1 className="text-3xl font-black text-slate-900">Meal Plans</h1>
-              <p className="text-slate-500 font-medium text-sm">AI-generated 7-day meal plans</p>
+              <p className="text-slate-500 font-medium text-sm">7-day meal plan</p>
             </div>
           </div>
         </div>
@@ -303,20 +303,28 @@ export default function MealPlansPage() {
             {/* Day selector */}
             <div className="bg-white rounded-[2rem] border border-slate-100 shadow-sm p-4">
               <div className="grid grid-cols-7 gap-2">
-                {DAY_NAMES.map((name, i) => (
-                  <button
-                    key={i}
-                    onClick={() => setSelectedDay(i + 1)}
-                    className={`py-3 rounded-xl font-bold text-xs transition-all active:scale-95 cursor-pointer ${
-                      selectedDay === i + 1
-                        ? 'bg-emerald-600 text-white shadow-md'
-                        : 'bg-slate-50 text-slate-500 hover:bg-slate-100'
-                    }`}
-                  >
-                    <span className="hidden sm:inline">{name}</span>
-                    <span className="sm:hidden">{name.slice(0, 3)}</span>
-                  </button>
-                ))}
+                {Array.from({ length: 7 }).map((_, i) => {
+                  const dayDate = new Date(plan.startDate + 'T00:00:00');
+                  dayDate.setDate(dayDate.getDate() + i);
+                  const weekdayLong = dayDate.toLocaleDateString('en-US', { weekday: 'long' });
+                  const weekdayShort = dayDate.toLocaleDateString('en-US', { weekday: 'short' });
+                  const dateLabel = dayDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                  return (
+                    <button
+                      key={i}
+                      onClick={() => setSelectedDay(i + 1)}
+                      className={`py-3 rounded-xl font-bold text-xs transition-all active:scale-95 cursor-pointer ${
+                        selectedDay === i + 1
+                          ? 'bg-emerald-600 text-white shadow-md'
+                          : 'bg-slate-50 text-slate-500 hover:bg-slate-100'
+                      }`}
+                    >
+                      <span className="hidden sm:inline">{weekdayLong}</span>
+                      <span className="sm:hidden">{weekdayShort}</span>
+                      <span className="block text-[10px] font-bold opacity-70 mt-0.5">{dateLabel}</span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
@@ -339,7 +347,11 @@ export default function MealPlansPage() {
             <div className="bg-white rounded-[2.5rem] border border-slate-100 shadow-sm p-8 space-y-4">
               <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
                 <CookingPot className="w-5 h-5 text-emerald-600" />
-                {DAY_NAMES[selectedDay - 1]}&apos;s Recipes
+                {(() => {
+                  const d = new Date(plan.startDate + 'T00:00:00');
+                  d.setDate(d.getDate() + selectedDay - 1);
+                  return `${d.toLocaleDateString('en-US', { weekday: 'long' })}'s Recipes`;
+                })()}
               </h3>
 
               {dayRecipes.length === 0 ? (

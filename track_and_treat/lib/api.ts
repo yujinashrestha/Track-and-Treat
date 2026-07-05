@@ -1,4 +1,17 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
+// Resolve the backend base URL at runtime. The backend runs on the SAME host
+// as the frontend, on port 3000 — so derive it from whatever host the app was
+// opened on (localhost, a LAN IP, whatever). This means no hardcoded/DHCP IP
+// and no rebuild when the network address changes. Set NEXT_PUBLIC_API_URL to
+// override (e.g. a separate API host in production).
+const API_PORT = process.env.NEXT_PUBLIC_API_PORT || '3000';
+
+function apiBase(): string {
+  if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL;
+  if (typeof window !== 'undefined') {
+    return `${window.location.protocol}//${window.location.hostname}:${API_PORT}`;
+  }
+  return `http://localhost:${API_PORT}`; // SSR fallback (auth pages are client-side)
+}
 
 type RequestOptions = Omit<RequestInit, 'body'> & {
   body?: unknown;
@@ -18,7 +31,7 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
     headers['Authorization'] = `Bearer ${accessToken}`;
   }
 
-  const res = await fetch(`${API_BASE}/${path}`, {
+  const res = await fetch(`${apiBase()}/${path}`, {
     ...rest,
     headers,
     body: body ? JSON.stringify(body) : undefined,
@@ -29,7 +42,7 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
     const refreshed = await tryRefreshTokens();
     if (refreshed) {
       headers['Authorization'] = `Bearer ${localStorage.getItem('accessToken')}`;
-      const retry = await fetch(`${API_BASE}/${path}`, {
+      const retry = await fetch(`${apiBase()}/${path}`, {
         ...rest,
         headers,
         body: body ? JSON.stringify(body) : undefined,
@@ -62,7 +75,7 @@ async function tryRefreshTokens(): Promise<boolean> {
   if (!refreshToken) return false;
 
   try {
-    const res = await fetch(`${API_BASE}/auth/refresh`, {
+    const res = await fetch(`${apiBase()}/auth/refresh`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refreshToken }),
@@ -340,6 +353,22 @@ export function createMealLog(data: { foodItemId: number; quantity: number; meal
 
 export function logRecipe(data: { recipeId: number; quantity?: number; mealType: MealType; loggedAt?: string }) {
   return request<MealLog>('meal-logs/recipe', {
+    method: 'POST',
+    body: data,
+  });
+}
+
+// Log several ingredients as one grouped meal (the Build Meal flow).
+export function logMeal(data: { name: string; mealType: MealType; items: { foodItemId: number; quantity: number }[]; loggedAt?: string }) {
+  return request<{ logged: MealLog[]; groupId: string; groupName: string }>('meal-logs/meal', {
+    method: 'POST',
+    body: data,
+  });
+}
+
+// Create a user-owned recipe from a composition (saved to the catalog, not logged).
+export function createRecipe(data: { name: string; mealTypes: string[]; complexity: number; prepMinutes: number; composition: { foodItemId: number; grams: number }[] }) {
+  return request<Recipe>('recipes', {
     method: 'POST',
     body: data,
   });

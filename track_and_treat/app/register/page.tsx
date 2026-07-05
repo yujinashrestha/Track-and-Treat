@@ -3,12 +3,14 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { Eye, EyeOff } from 'lucide-react';
 import { register, ApiError } from '@/lib/api';
 
 export default function Register() {
   const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const router = useRouter();
@@ -71,15 +73,25 @@ export default function Register() {
             title="Letters, numbers, and underscores only"
             className="w-full p-4 border border-emerald-100 rounded-2xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all outline-none bg-emerald-50/30"
           />
-          <input
-            type="password"
-            placeholder="Password (min 8 characters)"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            minLength={8}
-            className="w-full p-4 border border-emerald-100 rounded-2xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all outline-none bg-emerald-50/30"
-          />
+          <div className="relative">
+            <input
+              type={showPassword ? 'text' : 'password'}
+              placeholder="Password (min 8 characters)"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              minLength={8}
+              className="w-full p-4 pr-12 border border-emerald-100 rounded-2xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all outline-none bg-emerald-50/30"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((v) => !v)}
+              aria-label={showPassword ? 'Hide password' : 'Show password'}
+              className="absolute right-4 top-1/2 -translate-y-1/2 text-emerald-600/60 hover:text-emerald-700 transition-colors"
+            >
+              {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+            </button>
+          </div>
           <button
             type="submit"
             disabled={loading}

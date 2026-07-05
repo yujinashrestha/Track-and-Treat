@@ -2,11 +2,12 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, CalendarDays, History, UserCircle } from 'lucide-react';
+import { LayoutDashboard, CalendarDays, History, UserCircle, PlusSquare } from 'lucide-react';
 
 const NAV_ITEMS = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/meal-plans', label: 'Meal Plans', icon: CalendarDays },
+  { href: '/create', label: 'Create', icon: PlusSquare },
   { href: '/history', label: 'History', icon: History },
   { href: '/profile', label: 'Profile', icon: UserCircle },
 ];

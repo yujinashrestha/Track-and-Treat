@@ -17,12 +17,12 @@ import { useAuth } from '@/lib/auth-context';
 import { AppNav } from '@/components/app-nav';
 import {
   getStats, getDailyProgress, parseText, deleteMealLog,
-  searchFood, createMealLog, searchRecipes, logRecipe,
+  searchFood, createMealLog, createFood, createRecipe, searchRecipes, getRecipe, logRecipe, logMeal,
   createWaterLog, getWaterSummary, deleteWaterLog,
-  getCurrentAdaptiveProfile, computeAdaptiveProfileApi,
+  getCurrentAdaptiveProfile, computeAdaptiveProfileApi, generateMealPlan,
   ApiError,
   type MealLog, type MealType, type DailyProgress, type FoodItem, type WaterSummary,
-  type StrictnessLevel, type Quadrant, type AdaptiveProfileData, type Recipe,
+  type StrictnessLevel, type Quadrant, type AdaptiveProfileData, type Recipe, type MealPlan,
 } from '@/lib/api';
 
 const MEAL_TYPE_LABELS: Record<MealType, string> = {
@@ -40,7 +40,10 @@ const MEAL_TYPE_EMOJI: Record<MealType, string> = {
 };
 
 function todayStr() {
-  return new Date().toISOString().split('T')[0];
+  // Local date (YYYY-MM-DD). toISOString() would use UTC and be a day off in
+  // non-UTC timezones.
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 function timeAgo(dateStr: string) {
@@ -63,6 +66,9 @@ export default function Dashboard() {
   const [quadrant, setQuadrant] = useState<Quadrant | null>(null);
   const [adaptiveProfile, setAdaptiveProfile] = useState<AdaptiveProfileData | null>(null);
   const [computingProfile, setComputingProfile] = useState(false);
+  const [suggestedPlan, setSuggestedPlan] = useState<MealPlan | null>(null);
+  const [showSuggestedPlan, setShowSuggestedPlan] = useState(false);
+  const [recalibrateError, setRecalibrateError] = useState('');
 
   // Meal data from API
   const [dailyProgress, setDailyProgress] = useState<DailyProgress | null>(null);
@@ -74,9 +80,10 @@ export default function Dashboard() {
 
   // Form State
   const [showMealForm, setShowMealForm] = useState(false);
-  const [entryMode, setEntryMode] = useState<'text' | 'search' | 'recipe'>('text');
+  const [entryMode, setEntryMode] = useState<'build' | 'search' | 'recipe'>('build');
   const [mealText, setMealText] = useState('');
   const [mealType, setMealType] = useState<MealType>('lunch');
+  const [logDate, setLogDate] = useState(() => todayStr());
   const [parseResult, setParseResult] = useState<any>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [logged, setLogged] = useState(false);
@@ -96,6 +103,32 @@ export default function Dashboard() {
   const [recipeSearching, setRecipeSearching] = useState(false);
   const [selectedRecipe, setSelectedRecipe] = useState<Recipe | null>(null);
   const [recipeLogging, setRecipeLogging] = useState(false);
+
+  // Build Meal: compose a meal from several ingredients, log as one grouped entry
+  const [buildQuery, setBuildQuery] = useState('');
+  const [buildResults, setBuildResults] = useState<FoodItem[]>([]);
+  const [buildSearching, setBuildSearching] = useState(false);
+  const [buildItems, setBuildItems] = useState<{ food: FoodItem; quantity: number }[]>([]);
+  const [buildName, setBuildName] = useState('');
+  const [buildLogging, setBuildLogging] = useState(false);
+  // create an ingredient inline while building a meal
+  const [buildCreating, setBuildCreating] = useState(false);
+  const [buildNew, setBuildNew] = useState({ name: '', calories: '', protein: '', carbs: '', fat: '', fiber: '', category: 'other' });
+  const [buildNewSaving, setBuildNewSaving] = useState(false);
+  // save the composed meal as a reusable recipe
+  const [buildSaveRecipe, setBuildSaveRecipe] = useState(false);
+  const [buildRecipeComplexity, setBuildRecipeComplexity] = useState(3);
+  const [buildRecipePrep, setBuildRecipePrep] = useState(15);
+  const [buildRecipeSaving, setBuildRecipeSaving] = useState(false);
+  const [buildRecipeMsg, setBuildRecipeMsg] = useState('');
+
+  // Logging a meal straight from today's plan. `logPlanServings` defaults to the
+  // plan's portion-scaling factor so we log the exact planned portion, not the
+  // unscaled base recipe. `logPlanBaseCal` is the recipe's base kcal (1 serving).
+  const [logPlanKey, setLogPlanKey] = useState<string | null>(null);
+  const [logPlanServings, setLogPlanServings] = useState(1);
+  const [logPlanBaseCal, setLogPlanBaseCal] = useState(0);
+  const [logPlanBusy, setLogPlanBusy] = useState(false);
 
   const loadDashboardData = useCallback(async () => {
     try {
@@ -304,7 +337,7 @@ export default function Dashboard() {
     setManualLogging(true);
     setFormError('');
     try {
-      await createMealLog({ foodItemId: selectedFood.id, quantity, mealType });
+      await createMealLog({ foodItemId: selectedFood.id, quantity, mealType, loggedAt: logDate });
       setLogged(true);
       setTimeout(() => {
         setShowMealForm(false);
@@ -338,7 +371,7 @@ export default function Dashboard() {
     setRecipeLogging(true);
     setFormError('');
     try {
-      await logRecipe({ recipeId: selectedRecipe.id, quantity, mealType });
+      await logRecipe({ recipeId: selectedRecipe.id, quantity, mealType, loggedAt: logDate });
       setLogged(true);
       setTimeout(() => {
         setShowMealForm(false);
@@ -353,16 +386,153 @@ export default function Dashboard() {
     }
   };
 
+  // Open a planned meal's log panel and default servings to the plan's scale
+  // factor (plannedCalories / baseRecipeCalories) so logging matches the plan.
+  const handleBuildSearch = async () => {
+    if (!buildQuery.trim()) return;
+    setBuildSearching(true);
+    setFormError('');
+    try {
+      setBuildResults(await searchFood(buildQuery));
+    } catch {
+      setFormError('Search failed. Please try again.');
+    } finally {
+      setBuildSearching(false);
+    }
+  };
+
+  const addBuildItem = (food: FoodItem) => {
+    setBuildItems((items) =>
+      items.some((it) => it.food.id === food.id) ? items : [...items, { food, quantity: 1 }],
+    );
+  };
+  const setBuildQty = (id: number, q: number) =>
+    setBuildItems((items) => items.map((it) => (it.food.id === id ? { ...it, quantity: Math.max(0.25, Math.round(q * 100) / 100) } : it)));
+  const removeBuildItem = (id: number) =>
+    setBuildItems((items) => items.filter((it) => it.food.id !== id));
+
+  const handleLogBuiltMeal = async () => {
+    if (buildItems.length === 0) return;
+    setBuildLogging(true);
+    setFormError('');
+    try {
+      await logMeal({
+        name: buildName.trim() || 'My meal',
+        mealType,
+        items: buildItems.map((it) => ({ foodItemId: it.food.id, quantity: it.quantity })),
+        loggedAt: logDate,
+      });
+      setLogged(true);
+      setTimeout(() => {
+        setShowMealForm(false);
+        resetFormState();
+        loadDashboardData();
+      }, 800);
+    } catch (err) {
+      if (err instanceof ApiError) setFormError(err.message);
+      else setFormError('Failed to log meal.');
+    } finally {
+      setBuildLogging(false);
+    }
+  };
+
+  const handleCreateBuildIngredient = async () => {
+    if (!buildNew.name.trim() || buildNew.calories === '') { setFormError('Ingredient name and calories are required.'); return; }
+    setBuildNewSaving(true);
+    setFormError('');
+    try {
+      const created = await createFood({
+        name: buildNew.name.trim(), servingSize: '100', servingUnit: 'g',
+        calories: Number(buildNew.calories), protein: Number(buildNew.protein || 0),
+        carbs: Number(buildNew.carbs || 0), fat: Number(buildNew.fat || 0),
+        fiber: Number(buildNew.fiber || 0), category: buildNew.category,
+      });
+      addBuildItem(created);
+      setBuildNew({ name: '', calories: '', protein: '', carbs: '', fat: '', fiber: '', category: 'other' });
+      setBuildCreating(false);
+    } catch (err) {
+      setFormError(err instanceof ApiError ? err.message : 'Failed to create ingredient.');
+    } finally {
+      setBuildNewSaving(false);
+    }
+  };
+
+  const handleSaveBuiltAsRecipe = async () => {
+    if (buildItems.length === 0) return;
+    if (!buildName.trim()) { setFormError('Name the meal above to save it as a recipe.'); return; }
+    setBuildRecipeSaving(true);
+    setFormError('');
+    try {
+      await createRecipe({
+        name: buildName.trim(),
+        mealTypes: [mealType],
+        complexity: buildRecipeComplexity,
+        prepMinutes: buildRecipePrep,
+        // Build Meal quantities are servings; recipes need grams (serving is per-100g).
+        composition: buildItems.map((it) => ({
+          foodItemId: it.food.id,
+          grams: Math.max(1, Math.round(it.quantity * (parseFloat(it.food.servingSize) || 100))),
+        })),
+      });
+      setBuildSaveRecipe(false);
+      setBuildRecipeMsg('Saved to your Recipes — find it in the Recipes tab.');
+      setTimeout(() => setBuildRecipeMsg(''), 3000);
+    } catch (err) {
+      setFormError(err instanceof ApiError ? err.message : 'Failed to save recipe.');
+    } finally {
+      setBuildRecipeSaving(false);
+    }
+  };
+
+  const openPlannedLog = async (key: string, recipeId: number, plannedCal: number) => {
+    if (logPlanKey === key) { setLogPlanKey(null); return; }
+    setLogPlanKey(key);
+    setLogPlanServings(1);
+    setLogPlanBaseCal(0);
+    try {
+      const base = await getRecipe(recipeId);
+      const baseCal = Number(base.calories);
+      setLogPlanBaseCal(baseCal);
+      if (baseCal > 0) setLogPlanServings(Math.round((plannedCal / baseCal) * 100) / 100);
+    } catch {
+      // fall back to 1 serving if the recipe can't be fetched
+    }
+  };
+
+  const handleLogPlanned = async (recipeId: number, mealType: string) => {
+    setLogPlanBusy(true);
+    try {
+      await logRecipe({ recipeId, quantity: logPlanServings, mealType: mealType as MealType, loggedAt: logDate });
+      setLogPlanKey(null);
+      setLogPlanServings(1);
+      await loadDashboardData();
+    } catch {
+      // non-fatal; leave the panel open so the user can retry
+    } finally {
+      setLogPlanBusy(false);
+    }
+  };
+
   const handleComputeProfile = async () => {
     setComputingProfile(true);
+    setRecalibrateError('');
     try {
+      // 1) recalibrate from this week's logs (must run while the plan is still
+      //    active so adherence + skipped recipes are captured), then
+      // 2) generate next week's plan reflecting the fresh profile.
       const profile = await computeAdaptiveProfileApi();
       setAdaptiveProfile(profile);
       setQuadrant(profile.quadrant);
       setStrictness(profile.strictnessLevel);
+      const nextPlan = await generateMealPlan();
+      setSuggestedPlan(nextPlan);
+      setShowSuggestedPlan(true);
       await loadDashboardData();
-    } catch {}
-    finally { setComputingProfile(false); }
+    } catch (err) {
+      setRecalibrateError(err instanceof ApiError ? err.message : 'Recalibration failed.');
+    } finally {
+      setComputingProfile(false);
+    }
   };
 
   const resetFormState = () => {
@@ -377,7 +547,14 @@ export default function Dashboard() {
     setRecipeQuery('');
     setRecipeResults([]);
     setSelectedRecipe(null);
-    setEntryMode('text');
+    setBuildQuery('');
+    setBuildResults([]);
+    setBuildItems([]);
+    setBuildName('');
+    setBuildCreating(false);
+    setBuildNew({ name: '', calories: '', protein: '', carbs: '', fat: '', fiber: '', category: 'other' });
+    setBuildSaveRecipe(false);
+    setEntryMode('build');
   };
 
   const handleAddWater = async (ml: number) => {
@@ -503,15 +680,49 @@ export default function Dashboard() {
                           r.items!.push(item);
                           r.totalCal += Number(item.calories);
                         }
-                        return Array.from(recipeMap.values()).map((recipe, i) => {
+                        return Array.from(recipeMap.entries()).map(([key, recipe]) => {
                           const mealIcons: Record<string, React.ReactNode> = { breakfast: <Coffee className="w-3 h-3" />, lunch: <Sun className="w-3 h-3" />, dinner: <Moon className="w-3 h-3" />, snack: <Popcorn className="w-3 h-3" /> };
+                          const recipeId = recipe.items?.[0]?.recipeId ?? null;
+                          const canLog = recipeId != null;
+                          const isOpen = logPlanKey === key;
                           return (
-                            <div key={i} className="p-3 bg-violet-50 rounded-xl">
-                              <div className="flex items-center gap-2 mb-1">
-                                <span className="text-violet-500">{mealIcons[recipe.mealType] || <Utensils className="w-3 h-3" />}</span>
-                                <p className="font-bold text-slate-800 text-sm truncate">{recipe.name}</p>
-                              </div>
-                              <p className="text-xs font-bold text-violet-400">{Math.round(recipe.totalCal)} kcal</p>
+                            <div key={key} className="bg-violet-50 rounded-xl overflow-hidden">
+                              <button
+                                type="button"
+                                disabled={!canLog}
+                                onClick={() => canLog && openPlannedLog(key, recipeId!, recipe.totalCal)}
+                                className={`w-full text-left p-3 transition-colors ${canLog ? 'cursor-pointer hover:bg-violet-100' : 'cursor-default'}`}
+                                title={canLog ? 'Log this planned meal' : undefined}
+                              >
+                                <div className="flex items-center gap-2 mb-1">
+                                  <span className="text-violet-500">{mealIcons[recipe.mealType] || <Utensils className="w-3 h-3" />}</span>
+                                  <p className="font-bold text-slate-800 text-sm truncate flex-1">{recipe.name}</p>
+                                  {canLog && <PlusCircle className="w-4 h-4 text-violet-400 shrink-0" />}
+                                </div>
+                                <p className="text-xs font-bold text-violet-400">{Math.round(recipe.totalCal)} kcal</p>
+                              </button>
+                              {isOpen && canLog && (
+                                <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="px-3 pb-3 pt-2 space-y-2 border-t border-violet-100">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[10px] font-black uppercase tracking-widest text-violet-400">Portions</span>
+                                    <div className="flex items-center gap-1 bg-white rounded-lg p-0.5 ml-auto">
+                                      <button type="button" onClick={() => setLogPlanServings((s) => Math.max(0.25, Math.round((s - 0.25) * 100) / 100))} className="p-1 hover:bg-slate-50 rounded cursor-pointer"><Minus className="w-3 h-3 text-slate-600" /></button>
+                                      <span className="w-8 text-center font-black text-slate-900 text-sm">{logPlanServings}</span>
+                                      <button type="button" onClick={() => setLogPlanServings((s) => Math.round((s + 0.25) * 100) / 100)} className="p-1 hover:bg-slate-50 rounded cursor-pointer"><Plus className="w-3 h-3 text-slate-600" /></button>
+                                    </div>
+                                  </div>
+                                  <p className="text-[10px] font-bold text-violet-400 text-center">Defaults to the planned portion</p>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleLogPlanned(recipeId!, recipe.mealType)}
+                                    disabled={logPlanBusy}
+                                    className="w-full py-2 bg-violet-600 text-white rounded-lg font-black text-sm flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 hover:bg-violet-700 transition-colors"
+                                  >
+                                    {logPlanBusy ? <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <PlusCircle className="w-4 h-4" />}
+                                    Log this meal{logPlanBaseCal > 0 ? ` (~${Math.round(logPlanBaseCal * logPlanServings)} kcal)` : ''}
+                                  </button>
+                                </motion.div>
+                              )}
                             </div>
                           );
                         });
@@ -661,6 +872,22 @@ export default function Dashboard() {
                       <button onClick={() => { setShowMealForm(false); resetFormState(); }} className="text-slate-400 hover:text-slate-900 cursor-pointer"><X /></button>
                     </div>
 
+                    {/* Date selector (log for any day — past or future, e.g. to try out plan recalibration) */}
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 shrink-0">Logging for</label>
+                        <input type="date" value={logDate} onChange={(e) => setLogDate(e.target.value)}
+                          className="flex-1 px-3 py-2 bg-slate-50 rounded-xl outline-none font-bold text-slate-900 text-sm" />
+                        {logDate !== todayStr() && (
+                          <button type="button" onClick={() => setLogDate(todayStr())}
+                            className="text-xs font-bold text-emerald-600 cursor-pointer hover:underline shrink-0">Today</button>
+                        )}
+                      </div>
+                      {logDate !== todayStr() && (
+                        <p className="mt-1 text-[10px] font-bold text-amber-500">Logging for another day — it won&apos;t appear in today&apos;s list.</p>
+                      )}
+                    </div>
+
                     {/* Meal Type Selector */}
                     <div className="grid grid-cols-4 gap-2">
                       {(['breakfast', 'lunch', 'dinner', 'snack'] as MealType[]).map((mt) => (
@@ -674,8 +901,8 @@ export default function Dashboard() {
 
                     {/* Entry Mode Tabs */}
                     <div className="flex bg-slate-100 rounded-xl p-1 gap-1">
-                      <button onClick={() => setEntryMode('text')} className={`flex-1 py-2.5 rounded-lg font-bold text-sm transition-all cursor-pointer flex items-center justify-center gap-2 ${entryMode === 'text' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-                        <Zap className="w-4 h-4" /> Describe
+                      <button onClick={() => setEntryMode('build')} className={`flex-1 py-2.5 rounded-lg font-bold text-sm transition-all cursor-pointer flex items-center justify-center gap-2 ${entryMode === 'build' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                        <Utensils className="w-4 h-4" /> Build Meal
                       </button>
                       <button onClick={() => setEntryMode('search')} className={`flex-1 py-2.5 rounded-lg font-bold text-sm transition-all cursor-pointer flex items-center justify-center gap-2 ${entryMode === 'search' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
                         <Search className="w-4 h-4" /> Search Food
@@ -689,61 +916,143 @@ export default function Dashboard() {
                       <div className="p-4 bg-red-50 border border-red-200 text-red-700 rounded-2xl text-sm font-medium">{formError}</div>
                     )}
 
-                    {/* ── TEXT MODE ── */}
-                    {entryMode === 'text' && (
-                      <div className="space-y-4">
-                        <input
-                          value={mealText}
-                          onChange={(e) => { setMealText(e.target.value); setParseResult(null); setFormError(''); }}
-                          placeholder="e.g. 200g chicken and 100g rice..."
-                          className="w-full px-7 py-5 bg-slate-50 border-2 border-transparent rounded-[1.5rem] focus:bg-white focus:border-emerald-500 outline-none transition-all font-bold text-slate-900"
-                          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleParseText(); } }}
-                        />
-                        <button onClick={handleParseText} disabled={!mealText.trim() || analyzing}
-                          className={`w-full py-5 ${theme.bg} text-white rounded-2xl font-black flex items-center justify-center gap-3 transition-all cursor-pointer disabled:opacity-50`}
-                        >
-                          {analyzing ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Zap className="w-4 h-4" />}
-                          {analyzing ? 'Analyzing...' : 'Analyze & Log'}
-                        </button>
+                    {/* ── BUILD MEAL MODE ── */}
+                    {entryMode === 'build' && (() => {
+                      const totals = buildItems.reduce(
+                        (acc, it) => ({
+                          cal: acc.cal + Number(it.food.calories) * it.quantity,
+                          p: acc.p + Number(it.food.protein) * it.quantity,
+                          c: acc.c + Number(it.food.carbs) * it.quantity,
+                          f: acc.f + Number(it.food.fat) * it.quantity,
+                        }),
+                        { cal: 0, p: 0, c: 0, f: 0 },
+                      );
+                      return (
+                        <div className="space-y-4">
+                          {/* Search + add ingredients */}
+                          <div className="flex gap-2">
+                            <input
+                              value={buildQuery}
+                              onChange={(e) => { setBuildQuery(e.target.value); setFormError(''); }}
+                              placeholder="Add an ingredient..."
+                              className="flex-1 px-6 py-4 bg-slate-50 border-2 border-transparent rounded-xl focus:bg-white focus:border-emerald-500 outline-none transition-all font-bold text-slate-900"
+                              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleBuildSearch(); } }}
+                            />
+                            <button onClick={handleBuildSearch} disabled={!buildQuery.trim() || buildSearching}
+                              className="px-5 bg-emerald-600 text-white rounded-xl font-black hover:bg-emerald-700 transition-all cursor-pointer disabled:opacity-50 flex items-center gap-2">
+                              {buildSearching ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Search className="w-4 h-4" />}
+                            </button>
+                          </div>
 
-                        {parseResult && (
-                          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-slate-50 rounded-[2rem] p-6 border border-slate-100 space-y-5">
-                            {parseResult.logged.length > 0 && (
-                              <>
-                                <div className="space-y-2">
-                                  <p className="text-xs font-black uppercase tracking-widest text-emerald-600 mb-2">Logged Items</p>
-                                  {parseResult.logged.map((log: MealLog) => (
-                                    <div key={log.id} className="flex items-center justify-between p-4 bg-white rounded-xl">
-                                      <div>
-                                        <p className="font-bold text-slate-900 text-sm">{log.foodItem?.name || 'Food item'}</p>
-                                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{log.quantity}x {log.foodItem?.servingSize || ''}{log.foodItem?.servingUnit || ''}</p>
-                                      </div>
-                                      <div className="text-right">
-                                        <p className="font-black text-slate-900">{Math.round(Number(log.calories))} <span className="text-[10px]">kcal</span></p>
-                                        <p className="text-[10px] text-slate-400">{Math.round(Number(log.protein))}p / {Math.round(Number(log.carbs))}c / {Math.round(Number(log.fat))}f</p>
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                                <button onClick={handleLogSuccess} className={`w-full py-5 bg-emerald-600 text-white rounded-2xl font-black flex items-center justify-center gap-3 cursor-pointer ${logged ? 'bg-emerald-500' : ''}`}>
-                                  {logged ? <CheckCircle2 /> : <CheckCircle2 className="w-5 h-5" />}
-                                  {logged ? 'Saved!' : 'Done'}
+                          {buildResults.length > 0 && (
+                            <div className="max-h-[160px] overflow-y-auto space-y-1.5 pr-1">
+                              {buildResults.map((food) => (
+                                <button key={food.id} onClick={() => addBuildItem(food)}
+                                  className="w-full flex items-center justify-between p-3 bg-slate-50 rounded-xl hover:bg-emerald-50 transition-all cursor-pointer text-left">
+                                  <div>
+                                    <p className="font-bold text-slate-900 text-sm">{food.name}</p>
+                                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{food.servingSize}{food.servingUnit} · {food.calories} kcal</p>
+                                  </div>
+                                  <Plus className="w-4 h-4 text-emerald-500 shrink-0" />
                                 </button>
-                              </>
-                            )}
-                            {parseResult.unresolved && (
-                              <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl">
-                                <p className="text-amber-700 text-sm font-bold mb-1">Could not identify:</p>
-                                <p className="text-amber-600 text-xs">{parseResult.unresolved.items.join(', ')}</p>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* Create an ingredient on the spot */}
+                          <div>
+                            <button onClick={() => { setBuildCreating((v) => !v); setBuildNew((n) => ({ ...n, name: n.name || buildQuery })); setFormError(''); }}
+                              className="w-full py-2.5 border-2 border-dashed border-slate-200 rounded-xl text-slate-500 font-bold text-sm hover:border-emerald-400 hover:text-emerald-600 transition-all cursor-pointer flex items-center justify-center gap-2">
+                              <Plus className="w-4 h-4" /> {buildCreating ? 'Cancel' : "Can't find it? Create a new ingredient"}
+                            </button>
+                            {buildCreating && (
+                              <div className="mt-2 bg-slate-50 rounded-2xl p-4 space-y-3">
+                                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">New ingredient · per 100 g</p>
+                                <input value={buildNew.name} onChange={(e) => setBuildNew({ ...buildNew, name: e.target.value })} placeholder="Ingredient name" className="w-full px-4 py-2.5 bg-white rounded-xl outline-none font-bold text-slate-900 text-sm" />
+                                <div className="grid grid-cols-3 gap-2">
+                                  {([['calories', 'Cal'], ['protein', 'Prot'], ['carbs', 'Carb'], ['fat', 'Fat'], ['fiber', 'Fiber']] as const).map(([k, l]) => (
+                                    <input key={k} type="number" min="0" value={buildNew[k]} onChange={(e) => setBuildNew({ ...buildNew, [k]: e.target.value })} placeholder={l} className="w-full px-3 py-2 bg-white rounded-lg outline-none font-bold text-slate-900 text-sm" />
+                                  ))}
+                                  <select value={buildNew.category} onChange={(e) => setBuildNew({ ...buildNew, category: e.target.value })} className="w-full px-2 py-2 bg-white rounded-lg outline-none font-bold text-slate-900 text-xs">
+                                    {[['grains', 'Grains'], ['legumes', 'Legumes'], ['vegetables', 'Vegetables'], ['fruits', 'Fruits'], ['poultry', 'Poultry'], ['fish', 'Fish'], ['red_meat', 'Red meat'], ['dairy_eggs', 'Dairy & eggs'], ['nuts_seeds', 'Nuts & seeds'], ['fats_oils', 'Fats & oils'], ['other', 'Other']].map(([id, l]) => (<option key={id} value={id}>{l}</option>))}
+                                  </select>
+                                </div>
+                                <button onClick={handleCreateBuildIngredient} disabled={buildNewSaving} className="w-full py-2.5 bg-slate-900 text-white rounded-xl font-black text-sm flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50">
+                                  {buildNewSaving ? <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Plus className="w-4 h-4" />} Create &amp; add to meal
+                                </button>
                               </div>
                             )}
-                            {parseResult.logged.length === 0 && parseResult.unresolved && (
-                              <p className="text-center py-2 text-slate-500 font-bold text-sm">No food items recognized.</p>
-                            )}
-                          </motion.div>
-                        )}
-                      </div>
-                    )}
+                          </div>
+
+                          {/* The meal being built */}
+                          {buildItems.length > 0 && (
+                            <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 space-y-3">
+                              <input
+                                value={buildName}
+                                onChange={(e) => setBuildName(e.target.value)}
+                                placeholder="Name this meal (optional)"
+                                className="w-full px-4 py-2.5 bg-white rounded-xl outline-none font-bold text-slate-900 text-sm"
+                              />
+                              {buildItems.map((it) => (
+                                <div key={it.food.id} className="flex items-center gap-2 bg-white rounded-xl p-2.5">
+                                  <div className="flex-1 min-w-0">
+                                    <p className="font-bold text-slate-800 text-sm truncate">{it.food.name}</p>
+                                    <p className="text-[10px] text-slate-400 font-bold">{Math.round(Number(it.food.calories) * it.quantity)} kcal</p>
+                                  </div>
+                                  <div className="flex items-center gap-1 bg-slate-50 rounded-lg p-0.5">
+                                    <button onClick={() => setBuildQty(it.food.id, it.quantity - 0.25)} className="p-1 hover:bg-slate-100 rounded cursor-pointer"><Minus className="w-3 h-3 text-slate-600" /></button>
+                                    <span className="w-8 text-center font-black text-slate-900 text-xs">{it.quantity}</span>
+                                    <button onClick={() => setBuildQty(it.food.id, it.quantity + 0.25)} className="p-1 hover:bg-slate-100 rounded cursor-pointer"><Plus className="w-3 h-3 text-slate-600" /></button>
+                                  </div>
+                                  <button onClick={() => removeBuildItem(it.food.id)} className="text-slate-300 hover:text-red-500 cursor-pointer"><X className="w-4 h-4" /></button>
+                                </div>
+                              ))}
+                              <div className="grid grid-cols-4 gap-2 text-center pt-1">
+                                {[
+                                  { l: 'Cal', v: Math.round(totals.cal), c: 'text-orange-600' },
+                                  { l: 'Prot', v: Math.round(totals.p), c: 'text-emerald-600' },
+                                  { l: 'Carbs', v: Math.round(totals.c), c: 'text-amber-600' },
+                                  { l: 'Fat', v: Math.round(totals.f), c: 'text-slate-600' },
+                                ].map((s, i) => (
+                                  <div key={i}><p className={`font-black ${s.c}`}>{s.v}</p><p className="text-[9px] font-bold text-slate-400 uppercase">{s.l}</p></div>
+                                ))}
+                              </div>
+                              <button onClick={handleLogBuiltMeal} disabled={buildLogging}
+                                className={`w-full py-3 bg-emerald-600 text-white rounded-xl font-black flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 hover:bg-emerald-700 transition-colors ${logged ? 'bg-emerald-500' : ''}`}>
+                                {logged ? <CheckCircle2 className="w-5 h-5" /> : buildLogging ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <PlusCircle className="w-5 h-5" />}
+                                {logged ? 'Logged!' : buildLogging ? 'Logging...' : `Log meal (${buildItems.length} item${buildItems.length > 1 ? 's' : ''})`}
+                              </button>
+
+                              {/* Optionally save the composed meal as a reusable recipe */}
+                              <button onClick={() => { setBuildSaveRecipe((v) => !v); setFormError(''); }} className="w-full text-emerald-700 font-bold text-xs cursor-pointer hover:underline">
+                                {buildSaveRecipe ? 'Cancel' : 'Save this as a reusable recipe'}
+                              </button>
+                              {buildSaveRecipe && (
+                                <div className="bg-white rounded-xl p-3 space-y-2 border border-emerald-100">
+                                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Save as recipe · {mealType}</p>
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Complexity
+                                      <input type="number" min="1" max="10" value={buildRecipeComplexity} onChange={(e) => setBuildRecipeComplexity(Math.min(10, Math.max(1, Number(e.target.value))))} className="w-full mt-1 px-3 py-2 bg-slate-50 rounded-lg outline-none font-bold text-slate-900 text-sm" />
+                                    </label>
+                                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Prep min
+                                      <input type="number" min="0" value={buildRecipePrep} onChange={(e) => setBuildRecipePrep(Math.max(0, Number(e.target.value)))} className="w-full mt-1 px-3 py-2 bg-slate-50 rounded-lg outline-none font-bold text-slate-900 text-sm" />
+                                    </label>
+                                  </div>
+                                  <button onClick={handleSaveBuiltAsRecipe} disabled={buildRecipeSaving} className="w-full py-2 bg-slate-900 text-white rounded-lg font-black text-xs flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50">
+                                    {buildRecipeSaving ? <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Utensils className="w-3.5 h-3.5" />} Save recipe
+                                  </button>
+                                </div>
+                              )}
+                              {buildRecipeMsg && <p className="text-center text-[11px] font-bold text-emerald-600">{buildRecipeMsg}</p>}
+                            </div>
+                          )}
+
+                          {buildItems.length === 0 && (
+                            <p className="text-center py-3 text-slate-400 font-bold text-sm italic">Search ingredients and add them to build a meal.</p>
+                          )}
+                        </div>
+                      );
+                    })()}
 
                     {/* ── SEARCH MODE ── */}
                     {entryMode === 'search' && (
@@ -1042,7 +1351,7 @@ export default function Dashboard() {
                   <Brain className="w-4 h-4 text-violet-500" /> Adaptive Profile
                 </h3>
                 <button onClick={handleComputeProfile} disabled={computingProfile}
-                  className="p-1.5 text-slate-400 hover:text-violet-600 cursor-pointer disabled:opacity-50 transition-all" title="Recompute">
+                  className="p-1.5 text-slate-400 hover:text-violet-600 cursor-pointer disabled:opacity-50 transition-all" title="Recalibrate & plan next week">
                   <RefreshCw className={`w-4 h-4 ${computingProfile ? 'animate-spin' : ''}`} />
                 </button>
               </div>
@@ -1110,6 +1419,19 @@ export default function Dashboard() {
                   <p className="text-[9px] text-slate-400 font-bold">
                     Week {adaptiveProfile.weekNumber} &middot; {adaptiveProfile.weekStreak}wk streak &middot; {new Date(adaptiveProfile.computedAt).toLocaleDateString()}
                   </p>
+
+                  {recalibrateError && <p className="text-[10px] font-bold text-red-500">{recalibrateError}</p>}
+                  <button onClick={handleComputeProfile} disabled={computingProfile}
+                    className="w-full py-2 bg-violet-600 text-white rounded-xl font-bold text-xs hover:bg-violet-700 cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2">
+                    {computingProfile ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Brain className="w-3 h-3" />}
+                    {computingProfile ? 'Recalibrating...' : 'Recalibrate & plan next week'}
+                  </button>
+                  {suggestedPlan && !computingProfile && (
+                    <button onClick={() => setShowSuggestedPlan(true)}
+                      className="w-full py-2 bg-emerald-50 text-emerald-700 rounded-xl font-bold text-xs hover:bg-emerald-100 cursor-pointer flex items-center justify-center gap-2">
+                      <Utensils className="w-3 h-3" /> View next week&apos;s plan
+                    </button>
+                  )}
                 </div>
               ) : (
                 <div className="text-center py-4 space-y-3">
@@ -1118,8 +1440,9 @@ export default function Dashboard() {
                     className="px-4 py-2 bg-violet-600 text-white rounded-xl font-bold text-xs hover:bg-violet-700 cursor-pointer disabled:opacity-50 flex items-center gap-2 mx-auto"
                   >
                     {computingProfile ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Brain className="w-3 h-3" />}
-                    {computingProfile ? 'Computing...' : 'Compute Now'}
+                    {computingProfile ? 'Recalibrating...' : 'Recalibrate & plan next week'}
                   </button>
+                  {recalibrateError && <p className="text-[10px] font-bold text-red-500">{recalibrateError}</p>}
                 </div>
               )}
             </div>
@@ -1131,6 +1454,73 @@ export default function Dashboard() {
       <div className="sm:hidden pb-20">
         <AppNav />
       </div>
+
+      {/* Suggested next-week plan popup (after Recalibrate & plan) */}
+      <AnimatePresence>
+        {showSuggestedPlan && suggestedPlan && (
+          <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[60] bg-black/40 backdrop-blur-sm flex items-center justify-center p-4"
+            onClick={() => setShowSuggestedPlan(false)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-white rounded-[2rem] shadow-2xl max-w-lg w-full max-h-[85vh] overflow-y-auto p-6 space-y-4"
+            >
+              <div className="flex items-start justify-between">
+                <div>
+                  <h3 className="text-xl font-black text-slate-900 flex items-center gap-2"><Utensils className="w-5 h-5 text-emerald-600" /> Your next plan</h3>
+                  <p className="text-xs text-slate-400 font-bold mt-0.5">Recalibrated from this week&apos;s logs · {suggestedPlan.startDate} → {suggestedPlan.endDate}</p>
+                </div>
+                <button onClick={() => setShowSuggestedPlan(false)} className="text-slate-400 hover:text-slate-900 cursor-pointer"><X /></button>
+              </div>
+
+              {(() => {
+                const days = new Map<number, Map<string, { name: string; mealType: string; cal: number }>>();
+                for (const it of suggestedPlan.items) {
+                  if (!days.has(it.day)) days.set(it.day, new Map());
+                  const key = `${it.mealType}::${it.recipeName || it.foodItem?.name}`;
+                  const dm = days.get(it.day)!;
+                  const r = dm.get(key) || { name: it.recipeName || it.foodItem?.name || 'Meal', mealType: it.mealType, cal: 0 };
+                  r.cal += Number(it.calories);
+                  dm.set(key, r);
+                }
+                const order = ['breakfast', 'lunch', 'snack', 'dinner'];
+                return [...days.entries()].sort((a, b) => a[0] - b[0]).map(([day, recipes]) => {
+                  const d = new Date(suggestedPlan.startDate + 'T00:00:00');
+                  d.setDate(d.getDate() + day - 1);
+                  const label = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+                  const dayCal = [...recipes.values()].reduce((s, r) => s + r.cal, 0);
+                  return (
+                    <div key={day} className="bg-slate-50 rounded-2xl p-4">
+                      <div className="flex justify-between items-center mb-2">
+                        <p className="font-black text-slate-800 text-sm">{label}</p>
+                        <p className="text-xs font-bold text-slate-400">{Math.round(dayCal)} kcal</p>
+                      </div>
+                      <div className="space-y-1">
+                        {[...recipes.values()].sort((a, b) => order.indexOf(a.mealType) - order.indexOf(b.mealType)).map((r, i) => (
+                          <div key={i} className="flex justify-between text-xs gap-3">
+                            <span className="text-slate-600 font-bold"><span className="capitalize text-slate-400">{r.mealType}:</span> {r.name}</span>
+                            <span className="text-slate-400 font-bold shrink-0">{Math.round(r.cal)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                });
+              })()}
+
+              <button
+                onClick={() => { setShowSuggestedPlan(false); router.push('/meal-plans'); }}
+                className="w-full py-3 bg-emerald-600 text-white rounded-2xl font-black cursor-pointer hover:bg-emerald-700 transition-colors flex items-center justify-center gap-2"
+              >
+                <Utensils className="w-4 h-4" /> Open in Meal Plans
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }

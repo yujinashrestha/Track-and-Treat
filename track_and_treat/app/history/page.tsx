@@ -14,7 +14,7 @@ import { useAuth } from '@/lib/auth-context';
 import { AppNav } from '@/components/app-nav';
 import {
   getMealLogs, deleteMealLog, getWeeklyOverview, getWeeklyFeedback,
-  getWeightHistory, createWeightLog, getStats,
+  getWeightHistory, createWeightLog, getStats, getActiveMealPlan,
   ApiError,
   type MealLog, type WeeklyOverview, type WeeklyFeedbackResponse, type WeightLogEntry,
 } from '@/lib/api';
@@ -23,8 +23,14 @@ const MEAL_TYPE_EMOJI: Record<string, string> = {
   breakfast: '🌅', lunch: '☀️', dinner: '🌙', snack: '🍿',
 };
 
+// Format a Date as YYYY-MM-DD in LOCAL time. Using toISOString() here would
+// convert to UTC and shift the date by a day in non-UTC timezones.
+function toISO(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 function todayStr() {
-  return new Date().toISOString().split('T')[0];
+  return toISO(new Date());
 }
 
 function formatDate(d: string) {
@@ -37,7 +43,7 @@ function getMondayOfWeek(dateStr: string) {
   const diff = d.getDate() - ((day + 6) % 7);
   const monday = new Date(d);
   monday.setDate(diff);
-  return monday.toISOString().split('T')[0];
+  return toISO(monday);
 }
 
 const RATING_CONFIG: Record<string, { color: string; icon: React.ReactNode; label: string }> = {
@@ -54,6 +60,7 @@ export default function HistoryPage() {
   // Date navigation
   const [selectedDate, setSelectedDate] = useState(todayStr());
   const [weekStart, setWeekStart] = useState(() => getMondayOfWeek(todayStr()));
+  const [planStart, setPlanStart] = useState<string | null>(null);
 
   // Data
   const [dayLogs, setDayLogs] = useState<MealLog[]>([]);
@@ -116,10 +123,18 @@ export default function HistoryPage() {
     setFeedbackError('');
   }, [authLoading, isAuthenticated, weekStart, loadWeek]);
 
+  // Default the week to the active plan's start (the "meal-plan week"), once.
+  useEffect(() => {
+    if (authLoading || !isAuthenticated) return;
+    getActiveMealPlan()
+      .then((p) => { if (p?.startDate) { setPlanStart(p.startDate); setWeekStart(p.startDate); } })
+      .catch(() => {});
+  }, [authLoading, isAuthenticated]);
+
   const navigateDay = (dir: number) => {
     const d = new Date(selectedDate + 'T00:00:00');
     d.setDate(d.getDate() + dir);
-    const newDate = d.toISOString().split('T')[0];
+    const newDate = toISO(d);
     setSelectedDate(newDate);
     setWeekStart(getMondayOfWeek(newDate));
   };
@@ -214,16 +229,32 @@ export default function HistoryPage() {
               <TrendingUp className="w-5 h-5 text-emerald-600" /> Weekly Overview
             </h3>
             <div className="flex items-center gap-2">
-              <button onClick={() => { const d = new Date(weekStart + 'T00:00:00'); d.setDate(d.getDate() - 7); setWeekStart(d.toISOString().split('T')[0]); }} className="p-2 bg-slate-50 rounded-lg hover:bg-slate-100 cursor-pointer">
+              <button onClick={() => { const d = new Date(weekStart + 'T00:00:00'); d.setDate(d.getDate() - 7); setWeekStart(toISO(d)); }} className="p-2 bg-slate-50 rounded-lg hover:bg-slate-100 cursor-pointer">
                 <ChevronLeft className="w-4 h-4 text-slate-600" />
               </button>
-              <span className="text-sm font-bold text-slate-500 min-w-[180px] text-center">
-                {weekly ? `${formatDate(weekly.startDate)}` : 'Loading...'}
-              </span>
-              <button onClick={() => { const d = new Date(weekStart + 'T00:00:00'); d.setDate(d.getDate() + 7); setWeekStart(d.toISOString().split('T')[0]); }} className="p-2 bg-slate-50 rounded-lg hover:bg-slate-100 cursor-pointer">
+              {/* Pick where the week starts (defaults to the active plan's start) */}
+              <input
+                type="date"
+                value={weekStart}
+                onChange={(e) => setWeekStart(e.target.value)}
+                className="text-sm font-bold text-slate-600 bg-slate-50 rounded-lg px-2 py-1.5 outline-none cursor-pointer"
+                title="Week starts on this date"
+              />
+              <button onClick={() => { const d = new Date(weekStart + 'T00:00:00'); d.setDate(d.getDate() + 7); setWeekStart(toISO(d)); }} className="p-2 bg-slate-50 rounded-lg hover:bg-slate-100 cursor-pointer">
                 <ChevronRight className="w-4 h-4 text-slate-600" />
               </button>
             </div>
+          </div>
+
+          {/* Quick align: to the active plan's week, or to Monday */}
+          <div className="flex items-center gap-2 mb-4 text-xs font-bold">
+            <span className="text-slate-400">Week of {formatDate(weekStart)} · 7 days</span>
+            {planStart && weekStart !== planStart && (
+              <button onClick={() => setWeekStart(planStart)} className="text-emerald-600 hover:underline cursor-pointer">Align to my plan</button>
+            )}
+            {weekStart !== getMondayOfWeek(todayStr()) && (
+              <button onClick={() => setWeekStart(getMondayOfWeek(todayStr()))} className="text-slate-500 hover:underline cursor-pointer">This week (Mon)</button>
+            )}
           </div>
 
           {loadingWeekly ? (
@@ -333,11 +364,11 @@ export default function HistoryPage() {
           )}
         </div>
 
-        {/* AI Weekly Feedback */}
+        {/* Weekly Feedback */}
         <div className="bg-white rounded-[2.5rem] border border-slate-100 shadow-sm p-8">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
-              <MessageSquare className="w-5 h-5 text-violet-600" /> AI Weekly Feedback
+              <MessageSquare className="w-5 h-5 text-violet-600" /> Weekly Feedback
             </h3>
             {!feedback && (
               <button
@@ -346,7 +377,7 @@ export default function HistoryPage() {
                 className="px-5 py-2 bg-violet-600 text-white rounded-xl font-bold text-sm hover:bg-violet-700 transition-all cursor-pointer disabled:opacity-50 flex items-center gap-2"
               >
                 {loadingFeedback ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Lightbulb className="w-4 h-4" />}
-                {loadingFeedback ? 'Analyzing...' : 'Get Feedback'}
+                {loadingFeedback ? 'Loading...' : 'Get Feedback'}
               </button>
             )}
           </div>
@@ -401,7 +432,7 @@ export default function HistoryPage() {
           )}
 
           {!feedback && !feedbackError && !loadingFeedback && (
-            <p className="text-slate-400 text-sm font-medium text-center py-4">Click &quot;Get Feedback&quot; for an AI analysis of your week</p>
+            <p className="text-slate-400 text-sm font-medium text-center py-4">Click &quot;Get Feedback&quot; for a summary of your week</p>
           )}
         </div>
 
@@ -465,7 +496,7 @@ export default function HistoryPage() {
                       {MEAL_TYPE_EMOJI[log.mealType] || '🍽️'}
                     </div>
                     <div>
-                      <p className="font-black text-slate-900">{log.foodItem?.name || 'Unknown'}</p>
+                      <p className="font-black text-slate-900">{log.foodItem?.name || log.recipe?.name || log.groupName || 'Unknown'}</p>
                       <div className="flex gap-3 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
                         <span>{log.mealType}</span>
                         <span>{log.quantity}x</span>
