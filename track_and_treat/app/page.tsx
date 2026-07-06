@@ -49,7 +49,7 @@ export default function Home() {
             <div className="group bg-white/40 backdrop-blur-xl p-8 rounded-[2.5rem] border border-white/60 shadow-xl shadow-emerald-900/[0.02] hover:bg-white hover:scale-105 transition-all duration-500">
               <div className="w-14 h-14 bg-emerald-900 text-white rounded-2xl flex items-center justify-center text-2xl mb-6 shadow-lg group-hover:scale-110 transition-transform">📈</div>
               <h3 className="font-black text-emerald-950 mb-3 text-lg">Deep Insights</h3>
-              <p className="text-emerald-800/60 text-sm font-medium leading-loose">Visualization of your journey with AI-driven health predictions.</p>
+              <p className="text-emerald-800/60 text-sm font-medium leading-loose">Visualization of your journey with informative graphs</p>
             </div>
           </div>
 
